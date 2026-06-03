@@ -227,7 +227,10 @@
                   <strong>声音</strong>
                   <span class="muted">点击或动作切换时播放模型音效</span>
                 </span>
-                <input id="sound-enabled" type="checkbox" />
+                <span class="switch-control">
+                  <input id="sound-enabled" type="checkbox" />
+                  <span class="switch-track" aria-hidden="true"></span>
+                </span>
               </label>
               <label class="setting-row">
                 <span>

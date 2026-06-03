@@ -332,6 +332,17 @@
   }
 
   function loadModelSettings(url) {
+    // Use fetch for file:// URLs (external models), XHR for relative paths
+    var isFile = typeof url === "string" && url.startsWith("file://");
+    if (isFile) {
+      return fetch(url).then(function(r) {
+        if (!r.ok) throw new Error("fetch failed: " + r.status);
+        return r.json().then(function(settings) {
+          settings.url = url;
+          return settings;
+        });
+      });
+    }
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open("GET", url);

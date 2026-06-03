@@ -290,7 +290,11 @@ function registerIpc() {
 
 
 // 数据目录放到 D 盘，跟项目同盘避免跨盘 file:// 跨域
-app.setPath('userData', path.join(app.getAppPath(), 'user-data'));
+// Data dir: env DAIDAI_MODELS_DIR overrides, defaults to project user-data/
+var userDataPath = process.env.DAIDAI_MODELS_DIR
+  ? path.resolve(process.env.DAIDAI_MODELS_DIR)
+  : path.join(app.getAppPath(), 'user-data');
+app.setPath('userData', userDataPath);
 app.whenReady().then(() => {
   configStore = createConfigStore(app.getPath("userData"));
   config = configStore.load();

@@ -1,0 +1,23 @@
+{
+  "id": "haru-live2d",
+  "displayName": "Haru (Live2D)",
+  "description": "Live2D Cubism 4 测试模型 - Haru (Live2D 官方免费素材)",
+  "spritesheetPath": "haru_greeter_t03.model3.json",
+  "kind": "live2d",
+  "live2dModelUrl": "haru_greeter_t03.model3.json",
+  "frameWidth": 192,
+  "frameHeight": 208,
+  "columns": 1,
+  "rows": 1,
+  "defaultScale": 0.5,
+  "anchor": { "x": 0.5, "y": 1 },
+  "animations": {
+    "idle": { "frames": [0], "fps": 1, "loop": true },
+    "thinking": { "frames": [0], "fps": 1, "loop": true },
+    "tool": { "frames": [0], "fps": 1, "loop": true },
+    "waiting": { "frames": [0], "fps": 1, "loop": true },
+    "success": { "frames": [0], "fps": 1, "loop": false },
+    "error": { "frames": [0], "fps": 1, "loop": true },
+    "run": { "frames": [0], "fps": 1, "loop": true }
+  }
+}

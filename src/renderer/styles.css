@@ -1,0 +1,294 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+}
+
+body {
+  background: #f5f6f8;
+  color: #1f2937;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #111827;
+  border-radius: 6px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+button.primary {
+  border-color: #2563eb;
+  background: #2563eb;
+  color: #ffffff;
+}
+
+button.danger {
+  border-color: #dc2626;
+  color: #dc2626;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.manager-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+}
+
+.sidebar {
+  background: #111827;
+  color: #f9fafb;
+  padding: 20px;
+}
+
+.sidebar h1 {
+  margin: 0 0 8px;
+  font-size: 20px;
+  letter-spacing: 0;
+}
+
+.sidebar p {
+  margin: 0;
+  color: #cbd5e1;
+  line-height: 1.5;
+  font-size: 13px;
+}
+
+.main-panel {
+  padding: 24px;
+  overflow: auto;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 18px;
+}
+
+.section {
+  margin-bottom: 26px;
+}
+
+.section h2 {
+  margin: 0 0 12px;
+  font-size: 17px;
+}
+
+.settings-grid,
+.model-list {
+  display: grid;
+  gap: 10px;
+}
+
+.setting-row,
+.model-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.muted {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.45;
+  word-break: break-all;
+}
+
+.model-title {
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.pill {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #e0f2fe;
+  color: #075985;
+  font-size: 11px;
+  margin-left: 6px;
+}
+
+.pet-body {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: transparent;
+}
+
+.pet-stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+}
+
+#live2d-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  background: transparent;
+  -webkit-app-region: drag;
+}
+
+.empty-pet {
+  position: absolute;
+  inset: 18px;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.92);
+  background: rgba(17, 24, 39, 0.36);
+  border: 1px dashed rgba(255, 255, 255, 0.38);
+  border-radius: 8px;
+  pointer-events: none;
+}
+
+.empty-pet strong {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 15px;
+}
+
+.bubble-stack {
+  position: absolute;
+  top: 41%;
+  left: 54%;
+  transform: translate(-50%, -100%);
+  display: grid;
+  gap: 8px;
+  width: 330px;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.agent-bubble {
+  position: relative;
+  display: none;
+  height: 92px;
+  width: 330px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.94);
+  background: rgba(18, 20, 30, 0.84);
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(8px);
+  opacity: 0;
+  overflow: hidden;
+  transition: opacity 0.35s ease;
+}
+
+.agent-bubble::after {
+  content: "";
+  position: absolute;
+  bottom: -6px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 7px solid transparent;
+  border-right: 7px solid transparent;
+  border-top: 7px solid rgba(18, 20, 30, 0.84);
+}
+
+.agent-bubble.visible {
+  display: block;
+  opacity: 1;
+}
+
+.bubble-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #94a3b8;
+  flex: 0 0 auto;
+}
+
+.dot.thinking {
+  background: #a78bfa;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.dot.working {
+  background: #34d399;
+  animation: pulse 0.7s ease-in-out infinite;
+}
+
+.dot.replying {
+  background: #38bdf8;
+  animation: pulse 0.8s ease-in-out infinite;
+}
+
+.dot.complete {
+  background: #4ade80;
+}
+
+.dot.error {
+  background: #ef4444;
+}
+
+.bubble-title {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.bubble-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-all;
+  font-size: 11px;
+  line-height: 1.35;
+  color: rgba(226, 232, 240, 0.88);
+  max-height: 45px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.dragging #live2d-canvas {
+  filter: drop-shadow(0 10px 16px rgba(37, 99, 235, 0.24));
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.65);
+    opacity: 0.55;
+  }
+}

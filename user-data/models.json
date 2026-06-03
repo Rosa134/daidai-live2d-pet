@@ -1,0 +1,58 @@
+{
+  "models": [
+    {
+      "id": "haru",
+      "name": "haru",
+      "source": "bundled",
+      "kind": "cubism3+",
+      "directory": "D:\\呆呆工作区\\代码项目\\daidai-live2d-pet\\user-data\\models\\haru",
+      "modelPath": "D:\\呆呆工作区\\代码项目\\daidai-live2d-pet\\user-data\\models\\haru\\haru_greeter_t03.model3.json",
+      "importedAt": "2026-06-02T10:17:35.462Z"
+    },
+    {
+      "id": "rem",
+      "name": "rem",
+      "source": "bundled",
+      "kind": "cubism2",
+      "directory": "D:\\呆呆工作区\\代码项目\\daidai-live2d-pet\\user-data\\models\\rem",
+      "modelPath": "D:\\呆呆工作区\\代码项目\\daidai-live2d-pet\\user-data\\models\\rem\\rem.model.json",
+      "importedAt": "2026-06-02T10:17:35.488Z"
+    },
+    {
+      "id": "sagiri",
+      "name": "sagiri",
+      "source": "bundled",
+      "kind": "cubism2",
+      "directory": "D:\\呆呆工作区\\代码项目\\daidai-live2d-pet\\user-data\\models\\sagiri",
+      "modelPath": "D:\\呆呆工作区\\代码项目\\daidai-live2d-pet\\user-data\\models\\sagiri\\sagiri.model.json",
+      "importedAt": "2026-06-02T10:17:35.506Z"
+    },
+    {
+      "id": "mashiro",
+      "source": "user",
+      "kind": "cubism2",
+      "name": "mashiro",
+      "importedAt": "2026-06-03T15:58:41.0528429+08:00",
+      "directory": "D:\\呆呆工作区\\代码项目\\daidai-live2d-pet\\user-data\\models\\mashiro",
+      "modelPath": "D:\\呆呆工作区\\代码项目\\daidai-live2d-pet\\user-data\\models\\mashiro\\ryoufuku.model.json"
+    },
+    {
+      "id": "kanna",
+      "source": "user",
+      "kind": "cubism2",
+      "name": "kanna",
+      "importedAt": "2026-06-03T15:58:41.0643441+08:00",
+      "directory": "D:\\呆呆工作区\\代码项目\\daidai-live2d-pet\\user-data\\models\\kanna",
+      "modelPath": "D:\\呆呆工作区\\代码项目\\daidai-live2d-pet\\user-data\\models\\kanna\\Kobayaxi.model.json"
+    },
+    {
+      "id": "katou",
+      "source": "user",
+      "kind": "cubism2",
+      "name": "katou",
+      "importedAt": "2026-06-03T15:58:41.0694114+08:00",
+      "directory": "D:\\呆呆工作区\\代码项目\\daidai-live2d-pet\\user-data\\models\\katou",
+      "modelPath": "D:\\呆呆工作区\\代码项目\\daidai-live2d-pet\\user-data\\models\\katou\\katou_01\\katou_01.model.json"
+    }
+  ]
+}

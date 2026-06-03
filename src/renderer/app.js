@@ -131,7 +131,26 @@
     if (!live2dModel || !group) return;
     try {
       live2dModel.motion(group, index || 0);
+      if (loadedModelId && (group === 'tap_body' || group === 'flick_head')) {
+        tryPlayModelSound();
+      }
     } catch {}
+  }
+
+  var _lastSoundTime = 0;
+  function tryPlayModelSound() {
+    var now = Date.now();
+    if (now - _lastSoundTime < 800) return;
+    _lastSoundTime = now;
+    try {
+      var modelDir = loadedModelId || 'rem';
+      var base = '../../user-data/models/' + modelDir + '/sounds/';
+      var sounds = [base + 'haru_normal_01.mp3', base + 'haru_normal_02.mp3', base + 'haru_normal_03.mp3'];
+      var pick = sounds[Math.floor(Math.random() * sounds.length)];
+      var audio = new Audio(pick);
+      audio.volume = 0.4;
+      audio.play().catch(function() {});
+    } catch (e) {}
   }
 
   function motionForStatus(kind) {

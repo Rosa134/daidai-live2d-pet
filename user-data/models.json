@@ -53,6 +53,15 @@
       "importedAt": "2026-06-03T15:58:41.0694114+08:00",
       "directory": "D:\\呆呆工作区\\代码项目\\daidai-live2d-pet\\user-data\\models\\katou",
       "modelPath": "D:\\呆呆工作区\\代码项目\\daidai-live2d-pet\\user-data\\models\\katou\\katou_01\\katou_01.model.json"
+    },
+    {
+      "importedAt": "2026-06-03T16:21:02.4459633+08:00",
+      "kind": "cubism2",
+      "source": "user",
+      "directory": "D:\\呆呆工作区\\代码项目\\daidai-live2d-pet\\user-data\\models\\rem-daidai",
+      "name": "rem-daidai",
+      "id": "rem-daidai",
+      "modelPath": "D:\\呆呆工作区\\代码项目\\daidai-live2d-pet\\user-data\\models\\rem-daidai\\rem.model.json"
     }
   ]
 }

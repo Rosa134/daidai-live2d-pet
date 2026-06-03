@@ -13,3 +13,11 @@ userData/
 # Imported character assets should be added deliberately with license notes.
 assets/models/*
 !assets/models/.gitkeep
+
+# Electron runtime data (keep models)
+user-data/*
+!user-data/models/
+!user-data/models.json
+
+# Custom models (not for public distribution)
+user-data/models/rem-daidai/

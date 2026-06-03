@@ -139,6 +139,7 @@
 
   var _lastSoundTime = 0;
   function tryPlayModelSound() {
+    if (appState && appState.config && appState.config.soundEnabled === false) return;
     var now = Date.now();
     if (now - _lastSoundTime < 800) return;
     _lastSoundTime = now;
@@ -223,6 +224,13 @@
               </label>
               <label class="setting-row">
                 <span>
+                  <strong>声音</strong>
+                  <span class="muted">点击或动作切换时播放模型音效</span>
+                </span>
+                <input id="sound-enabled" type="checkbox" />
+              </label>
+              <label class="setting-row">
+                <span>
                   <strong>状态服务</strong>
                   <span class="muted">默认兼容本地成熟宠物 bridge 的 /status</span>
                 </span>
@@ -240,9 +248,11 @@
 
     const alwaysOnTop = document.getElementById("always-on-top");
     const opacity = document.getElementById("opacity");
+    const soundEnabled = document.getElementById("sound-enabled");
     const statusUrl = document.getElementById("status-url");
     alwaysOnTop.checked = Boolean(state.config.alwaysOnTop);
     opacity.value = String(state.config.opacity || 1);
+    soundEnabled.checked = state.config.soundEnabled !== false;
     statusUrl.value = state.config.statusPollUrl || "";
 
     document.getElementById("import-model").addEventListener("click", async () => {
@@ -254,6 +264,7 @@
     document.getElementById("hide-pet").addEventListener("click", () => api.hidePet());
     alwaysOnTop.addEventListener("change", () => api.setConfig({ alwaysOnTop: alwaysOnTop.checked }));
     opacity.addEventListener("input", () => api.setConfig({ opacity: Number(opacity.value) }));
+    soundEnabled.addEventListener("change", () => api.setConfig({ soundEnabled: soundEnabled.checked }));
     statusUrl.addEventListener("change", () => api.setConfig({ statusPollUrl: statusUrl.value.trim() }));
 
     renderModelList(state);

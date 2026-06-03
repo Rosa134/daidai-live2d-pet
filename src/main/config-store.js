@@ -4,6 +4,7 @@ const path = require("node:path");
 const DEFAULT_CONFIG = {
   petVisible: true,
   alwaysOnTop: true,
+  soundEnabled: true,
   opacity: 1,
   selectedModelId: "rem",
   statusPollUrl: "http://127.0.0.1:23334/status",
@@ -44,6 +45,7 @@ function mergeConfig(current, patch) {
     ...(patch && patch.petWindow)
   };
   next.opacity = Math.min(1, Math.max(0.2, Number(next.opacity || 1)));
+  next.soundEnabled = next.soundEnabled !== false;
   return next;
 }
 

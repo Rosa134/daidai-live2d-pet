@@ -12,7 +12,9 @@
     "start": "electron .",
     "dev": "electron . --dev",
     "test": "node --test",
-    "doctor": "node scripts/doctor.js"
+    "doctor": "node scripts/doctor.js",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder --win portable"
   },
   "keywords": [
     "live2d",
@@ -29,9 +31,39 @@
     "pixi.js": "^6.5.10"
   },
   "devDependencies": {
-    "electron": "^42.0.0"
+    "@electron/packager": "^20.0.0",
+    "electron": "^42.3.2",
+    "electron-builder": "^26.8.1"
   },
   "overrides": {
     "gh-pages": "^6.3.0"
+  },
+  "build": {
+    "appId": "com.daidai.live2d-pet",
+    "productName": "Daidai Live2D Pet",
+    "copyright": "MIT",
+    "directories": {
+      "output": "dist"
+    },
+    "asar": true,
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "src/renderer/assets/app-icon.png"
+    },
+    "portable": {
+      "artifactName": "Daidai-Live2D-Pet-${version}.exe"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json"
+    ]
   }
 }

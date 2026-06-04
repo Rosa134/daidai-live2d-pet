@@ -41,6 +41,7 @@ function rendererPayload() {
     config,
     models: modelRegistry.list(),
     selectedModel: selectedModel(),
+    modelsBasePath: modelRegistry.modelsDir,
     status: statusPoller ? statusPoller.getLastStatus() : { sources: [] }
   };
 }
@@ -289,8 +290,10 @@ function registerIpc() {
 }
 
 
-// 数据目录放到 D 盘，跟项目同盘避免跨盘 file:// 跨域
-app.setPath('userData', path.join(app.getAppPath(), 'user-data'));
+// 便携模式：数据目录放在 exe 同级，开发模式放在项目目录
+app.setPath('userData', app.isPackaged
+  ? path.join(path.dirname(app.getPath('exe')), 'user-data')
+  : path.join(app.getAppPath(), 'user-data'));
 app.whenReady().then(() => {
   configStore = createConfigStore(app.getPath("userData"));
   config = configStore.load();

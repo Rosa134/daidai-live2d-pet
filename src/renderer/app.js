@@ -143,11 +143,12 @@
     if (now - _lastSoundTime < 800) return;
     _lastSoundTime = now;
     try {
-      var modelDir = loadedModelId || 'rem';
-      var base = '../../user-data/models/' + modelDir + '/sounds/';
+      var model = appState && appState.selectedModel;
+      if (!model || !model.directory) return;
+      var base = model.directory.replace(/\\/g, '/') + '/sounds/';
       var sounds = [base + 'haru_normal_01.mp3', base + 'haru_normal_02.mp3', base + 'haru_normal_03.mp3'];
       var pick = sounds[Math.floor(Math.random() * sounds.length)];
-      var audio = new Audio(pick);
+      var audio = new Audio('file:///' + pick);
       audio.volume = 0.4;
       audio.play().catch(function() {});
     } catch (e) {}

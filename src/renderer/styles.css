@@ -45,6 +45,16 @@ button:disabled {
   cursor: not-allowed;
 }
 
+select {
+  min-width: 180px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #111827;
+  padding: 8px 10px;
+  font: inherit;
+}
+
 .manager-shell {
   min-height: 100vh;
   display: grid;
@@ -162,6 +172,40 @@ button:disabled {
   box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.22);
 }
 
+.sound-list {
+  display: grid;
+  gap: 10px;
+}
+
+.sound-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 260px) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.sound-row strong,
+.sound-row .muted {
+  display: block;
+}
+
+.sound-row select {
+  width: 100%;
+}
+
+.sound-empty {
+  padding: 12px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  color: #64748b;
+  background: #ffffff;
+  font-size: 13px;
+}
+
 .muted {
   color: #64748b;
   font-size: 12px;
@@ -205,6 +249,16 @@ button:disabled {
   display: block;
   background: transparent;
   -webkit-app-region: drag;
+}
+
+@media (max-width: 860px) {
+  .sound-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sound-row button {
+    width: fit-content;
+  }
 }
 
 .empty-pet {

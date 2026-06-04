@@ -5,6 +5,10 @@ const DEFAULT_CONFIG = {
   petVisible: true,
   alwaysOnTop: true,
   soundEnabled: true,
+  soundActions: {
+    flick_head: "random",
+    tap_body: "random"
+  },
   opacity: 1,
   selectedModelId: "rem",
   statusPollUrl: "http://127.0.0.1:23334/status",
@@ -43,6 +47,11 @@ function mergeConfig(current, patch) {
     ...DEFAULT_CONFIG.petWindow,
     ...(current && current.petWindow),
     ...(patch && patch.petWindow)
+  };
+  next.soundActions = {
+    ...DEFAULT_CONFIG.soundActions,
+    ...(current && current.soundActions),
+    ...(patch && patch.soundActions)
   };
   next.opacity = Math.min(1, Math.max(0.2, Number(next.opacity || 1)));
   next.soundEnabled = next.soundEnabled !== false;

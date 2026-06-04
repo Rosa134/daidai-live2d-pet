@@ -127,30 +127,65 @@
     focusLive2d(0, 0, false);
   }
 
+  const SOUND_ACTIONS = [
+    {
+      id: "flick_head",
+      name: "歪头 / 思考 / 提醒",
+      detail: "思考、等待确认、错误提醒时触发"
+    },
+    {
+      id: "tap_body",
+      name: "工作 / 回复 / 完成",
+      detail: "运行工具、回复中、完成反馈时触发"
+    }
+  ];
+
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
   function playLive2dMotion(group, index) {
     if (!live2dModel || !group) return;
     try {
       live2dModel.motion(group, index || 0);
       if (loadedModelId && (group === 'tap_body' || group === 'flick_head')) {
-        tryPlayModelSound();
+        tryPlayModelSound(group, false);
       }
     } catch {}
   }
 
   var _lastSoundTime = 0;
-  function tryPlayModelSound() {
-    if (appState && appState.config && appState.config.soundEnabled === false) return;
+  function resolveSoundUrl(actionId) {
+    const sounds = (appState && appState.selectedSounds) || [];
+    if (!sounds.length) return null;
+    const actions = (appState && appState.config && appState.config.soundActions) || {};
+    const selection = actions[actionId] || "random";
+    if (selection === "none") return null;
+    if (selection !== "random") {
+      const selected = sounds.find((sound) => sound.id === selection);
+      if (selected) return selected.url;
+    }
+    return sounds[Math.floor(Math.random() * sounds.length)].url;
+  }
+
+  function playSoundUrl(url) {
+    if (!url) return;
+    const audio = new Audio(url);
+    audio.volume = 0.4;
+    audio.play().catch(function() {});
+  }
+
+  function tryPlayModelSound(actionId, preview) {
+    if (!preview && appState && appState.config && appState.config.soundEnabled === false) return;
     var now = Date.now();
-    if (now - _lastSoundTime < 800) return;
+    if (!preview && now - _lastSoundTime < 800) return;
     _lastSoundTime = now;
     try {
-      var modelDir = loadedModelId || 'rem';
-      var base = '../../user-data/models/' + modelDir + '/sounds/';
-      var sounds = [base + 'haru_normal_01.mp3', base + 'haru_normal_02.mp3', base + 'haru_normal_03.mp3'];
-      var pick = sounds[Math.floor(Math.random() * sounds.length)];
-      var audio = new Audio(pick);
-      audio.volume = 0.4;
-      audio.play().catch(function() {});
+      playSoundUrl(resolveSoundUrl(actionId));
     } catch (e) {}
   }
 
@@ -189,6 +224,48 @@
     if (!statusMotionTimer && (kind === "thinking" || kind === "waiting-permission" || kind === "waiting-input")) {
       statusMotionTimer = setInterval(() => playLive2dMotion("flick_head", 1), 2500);
     }
+  }
+
+  function renderSoundSettings(state) {
+    const sounds = state.selectedSounds || [];
+    const actions = (state.config && state.config.soundActions) || {};
+    const options = [
+      '<option value="random">随机播放</option>',
+      '<option value="none">此动作静音</option>',
+      ...sounds.map((sound) => {
+        const label = sound.relativePath || sound.name || sound.id;
+        return `<option value="${escapeHtml(sound.id)}">${escapeHtml(label)}</option>`;
+      })
+    ].join("");
+
+    if (!sounds.length) {
+      return `
+        <section class="section">
+          <h2>音效配置</h2>
+          <div class="sound-empty">当前模型没有可用音频。把 .mp3 / .wav / .ogg 放到模型目录后会自动出现在这里。</div>
+        </section>
+      `;
+    }
+
+    return `
+      <section class="section">
+        <h2>音效配置</h2>
+        <div class="sound-list">
+          ${SOUND_ACTIONS.map((action) => `
+            <div class="sound-row">
+              <div>
+                <strong>${escapeHtml(action.name)}</strong>
+                <span class="muted">${escapeHtml(action.detail)}</span>
+              </div>
+              <select data-sound-action="${escapeHtml(action.id)}">
+                ${options}
+              </select>
+              <button type="button" data-preview-sound="${escapeHtml(action.id)}">试听</button>
+            </div>
+          `).join("")}
+        </div>
+      </section>
+    `;
   }
 
   function renderManager(state) {
@@ -241,6 +318,7 @@
               </label>
             </div>
           </section>
+          ${renderSoundSettings(state)}
           <section class="section">
             <h2>Live2D 模型</h2>
             <div id="model-list" class="model-list"></div>
@@ -257,6 +335,20 @@
     opacity.value = String(state.config.opacity || 1);
     soundEnabled.checked = state.config.soundEnabled !== false;
     statusUrl.value = state.config.statusPollUrl || "";
+    for (const select of document.querySelectorAll("[data-sound-action]")) {
+      const actionId = select.dataset.soundAction;
+      const selectedSound = (state.config.soundActions && state.config.soundActions[actionId]) || "random";
+      const hasSound = selectedSound === "random" || selectedSound === "none" || (state.selectedSounds || []).some((sound) => sound.id === selectedSound);
+      select.value = hasSound ? selectedSound : "random";
+      select.addEventListener("change", async () => {
+        const soundActions = { ...(appState.config.soundActions || {}), [actionId]: select.value };
+        appState = await api.setConfig({ soundActions });
+        renderManager(appState);
+      });
+    }
+    for (const button of document.querySelectorAll("[data-preview-sound]")) {
+      button.addEventListener("click", () => tryPlayModelSound(button.dataset.previewSound, true));
+    }
 
     document.getElementById("import-model").addEventListener("click", async () => {
       appState = await api.importModelDirectory();

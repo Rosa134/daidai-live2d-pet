@@ -17,5 +17,11 @@ contextBridge.exposeInMainWorld("daidaiPet", {
   hidePet: () => ipcRenderer.invoke("pet:hide"),
   onUpdate: (callback) => subscribe("app:update", callback),
   onCursorPosition: (callback) => subscribe("pet:cursor-position", callback),
-  onDragState: (callback) => subscribe("pet:drag-state", callback)
+  onDragState: (callback) => subscribe("pet:drag-state", callback),
+  tavernChat: (messages) => ipcRenderer.invoke("tavern:chat", messages),
+  tavernTts: (text) => ipcRenderer.invoke("tavern:tts", text),
+  tavernCleanup: () => ipcRenderer.invoke("tavern:cleanup"),
+  tavernFocusWindow: () => ipcRenderer.invoke("tavern:focus-window"),
+  tavernAbort: () => ipcRenderer.invoke("tavern:abort"),
+  reportRendererError: (payload) => ipcRenderer.invoke("app:renderer-error", payload)
 });

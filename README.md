@@ -3,11 +3,16 @@
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Node.js 18+](https://img.shields.io/badge/node-18%2B-green.svg)](https://nodejs.org/)
 
-开箱即用的 Live2D 桌面宠物 —— Electron 透明宠物窗 + 系统托盘 + 后台管理 + 多模型支持 + AI 会话状态联动（Codex / Claude Code）。
+开箱即用的 Live2D 桌面宠物。它把 Electron 透明宠物窗、系统托盘、后台管理、多模型导入、AI 会话状态提醒、角色聊天、TTS 语音、口型同步和随机肢体动作放在一个桌面应用里。
+
+项目默认服务于两种共存场景：
+
+- **工作提醒模式**：监听 Codex / Claude Code 状态，在角色头顶显示中文气泡，并根据思考、运行工具、回复、完成等状态切换动作。
+- **角色陪伴模式**：底部输入框直接和角色聊天，支持 OpenAI 兼容文本接口、火山引擎 TTS、角色卡提示词、音色配置、语音播放时的口型同步和随机说话动作。
 
 ## 截图
 
-打开应用后，Live2D 角色会出现在桌面右下角，随 AI 会话状态变化动作（思考时歪头、运行工具时打字、回复完成时待机），右上角显示状态气泡。
+打开应用后，Live2D 角色会出现在桌面右下角。AI 工作状态会显示在角色上方，角色聊天输入框显示在底部；语音播放时嘴型会跟随音频 RMS 变化，并穿插模型已有的说话/待机动作。
 
 ## ✨ 特性
 
@@ -16,7 +21,12 @@
 - **系统托盘** — 显示/隐藏宠物、打开管理、退出
 - **AI 状态联动** — 监听 Codex/Claude Code 会话，自动切换 Live2D 动作（思考/工作/回复/待机）
 - **状态气泡** — 实时显示 AI 当前状态，支持中文
-- **鼠标交互** — 拖动宠物、眼镜跟随鼠标
+- **角色聊天** — 底部输入框发起独立聊天会话，和 Codex/Claude 状态提醒互不干扰
+- **模型与语音配置** — 管理页可配置 OpenAI 兼容文本接口、模型 ID、角色卡、火山 TTS Token、音色和语速
+- **语音与口型同步** — TTS 播放时使用 Web Audio RMS 驱动 `ParamMouthOpenY`，嘴型随语音强弱变化
+- **随机肢体动作** — 待机和说话时从当前模型已有 motion 中抽样播放，避免不同模型动作名不一致导致报错
+- **动作音效** — 每个状态动作可独立选择音效，也可使用项目级声音目录随机播放
+- **鼠标交互** — 拖动宠物、眼睛跟随鼠标
 - **透明窗口** — 无边框透明置顶，不挡工作区
 - **内置状态桥** — 端口 23334，兼容 ClaudePet 协议
 
@@ -46,6 +56,18 @@ npm install
 - 右键托盘 → 「设置」打开管理窗口
 - 管理窗口中可选择/导入模型
 - 宠物自动监听 `http://127.0.0.1:23334/status` 获取 AI 状态
+- 如需角色聊天，在管理窗口配置文本模型 API Key 和火山 TTS Token
+
+## 配置密钥
+
+密钥不会写入源码。应用会优先读取本机运行时配置，其次读取环境变量：
+
+| 用途 | 管理页字段 | 环境变量回退 |
+|------|------------|--------------|
+| 文本模型 API Key | 文字 API Key | `DEEPSEEK_API_KEY` 或 `OPENAI_API_KEY` |
+| 火山 TTS Token | 火山 Token | `VOLCENGINE_TOKEN` |
+
+本机配置文件位于 Electron `userData` 目录下的 `config.json`。仓库 `.gitignore` 已忽略 `user-data/config.json`、日志和临时音频文件；公开提交前仍建议运行密钥扫描。
 
 ## 接入 AI 会话
 
@@ -62,6 +84,17 @@ curl -X POST http://127.0.0.1:23334/event -H "Content-Type: application/json" -d
 Codex 用户：宠物自动监听 `.codex/sessions/*.jsonl`，无需手动配置。
 Claude Code 用户：参考 [ClaudePet](https://github.com/Kodey/ClaudePet) 的 hook 配置。
 
+## 角色聊天与语音
+
+管理窗口的「聊天模型与角色卡」区域可配置：
+
+- OpenAI 兼容 `/chat/completions` 地址
+- 文本模型 ID，默认 `deepseek-chat`
+- 角色卡提示词，默认要求只输出角色要说的话，便于直接 TTS
+- 火山引擎 TTS AppID、Token、音色、语速
+
+每次应用启动都会开启一个新的本地聊天上下文。聊天输出不占用 Codex/Claude 状态气泡；TTS 播放时会驱动嘴型和随机说话动作。
+
 ## 导入模型
 
 1. 打开管理窗口（托盘 → 设置）
@@ -69,7 +102,7 @@ Claude Code 用户：参考 [ClaudePet](https://github.com/Kodey/ClaudePet) 的 
 3. 选择包含 `.model.json`（Cubism2）的目录
 4. 模型会复制到 `%APPDATA%/daidai-live2d-pet/models/`
 
-支持的格式：Cubism2（`.model.json`）。Cubism3+（`.model3.json`）暂不支持。
+支持的格式：当前稳定路径优先支持 Cubism2（`.model.json`）。Cubism3+（`.model3.json`）仍在验证中，不建议作为公开默认模型。
 
 ## 内置模型来源
 
@@ -103,7 +136,7 @@ npm run dev       # 开发模式（带 DevTools）
 │   │   ├── status-poller.js # 状态轮询 + 归一化
 │   │   └── codex-session-monitor.js # Codex JSONL 监听
 │   ├── renderer/       # 渲染进程
-│   │   ├── app.js           # Live2D 加载、气泡、状态联动、鼠标交互
+│   │   ├── app.js           # Live2D 加载、气泡、状态联动、聊天、口型、鼠标交互
 │   │   ├── index.html       # 入口（管理窗 + 宠物窗）
 │   │   ├── styles.css       # 样式
 │   │   └── vendor/          # PIXI + Cubism2 runtime
@@ -123,6 +156,8 @@ npm run dev       # 开发模式（带 DevTools）
 - **[PixiJS](https://github.com/pixijs/pixijs)**（MIT）— 2D WebGL 渲染引擎
 - **[Live2D Cubism SDK](https://www.live2d.com/)** — Live2D 技术核心，`live2dcubismcore.min.js` 来自官方 SDK
 - **[Eikanya/Live2d-model](https://github.com/Eikanya/Live2d-model)** — 开源 Live2D 模型合集，内置 5 个 Cubism2 模型来源于此
+- **[Open-LLM-VTuber](https://github.com/Open-LLM-VTuber/Open-LLM-VTuber)** — 参考其 LLM / TTS / Live2D 伴侣思路
+- **[live2d-py](https://github.com/Arkueid/live2d-py)** — 参考 RMS 音频强度映射到嘴型参数的口型同步方案
 
 ## License
 

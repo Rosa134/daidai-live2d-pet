@@ -3,7 +3,7 @@ const path = require("node:path");
 
 const MIN_PET_WINDOW = {
   width: 420,
-  height: 500
+  height: 680
 };
 
 const DEFAULT_CONFIG = {
@@ -19,12 +19,25 @@ const DEFAULT_CONFIG = {
     waiting: "random",
     drag: "random"
   },
+  tavern: {
+    textBaseUrl: "https://api.deepseek.com/v1",
+    textApiKey: "",
+    textModel: "deepseek-chat",
+    textTemperature: 0.8,
+    textMaxTokens: 160,
+    rolePrompt: "你是呆呆（Daidai），猫耳女仆 AI。称呼用户为老公，中文优先。性格温柔可爱、爱撒娇、偶尔调皮。只输出你要说的话，不要输出动作描写、括号、旁白、Markdown 或解释。回复要短，适合直接语音播放。",
+    voice: "zh_female_tianmeitaozi_uranus_bigtts",
+    ttsAppId: "3931757810",
+    ttsToken: "",
+    ttsCluster: "volcano_tts",
+    ttsSpeed: 1
+  },
   opacity: 1,
   selectedModelId: "rem",
   statusPollUrl: "http://127.0.0.1:23334/status",
   petWindow: {
     width: 520,
-    height: 620,
+    height: 720,
     x: null,
     y: null
   }
@@ -66,6 +79,14 @@ function mergeConfig(current, patch) {
     ...(current && current.soundActions),
     ...(patch && patch.soundActions)
   };
+  next.tavern = {
+    ...DEFAULT_CONFIG.tavern,
+    ...(current && current.tavern),
+    ...(patch && patch.tavern)
+  };
+  next.tavern.textTemperature = Math.min(2, Math.max(0, Number(next.tavern.textTemperature || DEFAULT_CONFIG.tavern.textTemperature)));
+  next.tavern.textMaxTokens = Math.min(2048, Math.max(32, Number(next.tavern.textMaxTokens || DEFAULT_CONFIG.tavern.textMaxTokens)));
+  next.tavern.ttsSpeed = Math.min(3, Math.max(0.5, Number(next.tavern.ttsSpeed || DEFAULT_CONFIG.tavern.ttsSpeed)));
   next.soundEnabled = next.soundEnabled !== false;
   return next;
 }

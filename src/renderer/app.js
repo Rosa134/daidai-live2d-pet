@@ -24,6 +24,11 @@
   let tavernLastMouthValue = 0;
   let randomBodyMotionTimer = null;
   let speakingBodyMotionTimer = null;
+  let hoverGreetTimer = null;
+  let lastHoverGreetAt = 0;
+  let wasCursorInside = false;
+  let suppressManagerRender = false;
+  let pendingManagerState = null;
   let statusMotionKind = "idle";
   let statusMotionTimer = null;
   // 全局错误捕获 - 显示在宠物窗上
@@ -253,6 +258,34 @@
   function clearSpeakingBodyMotion() {
     if (speakingBodyMotionTimer) clearTimeout(speakingBodyMotionTimer);
     speakingBodyMotionTimer = null;
+  }
+
+  async function triggerRandomChat() {
+    if (!live2dModel || tavernBusy) return;
+    if (Date.now() - lastHoverGreetAt < 7000) return;
+    lastHoverGreetAt = Date.now();
+    tavernBusy = true;
+    try {
+      initTavernAudio();
+      var result = await api.tavernChat([
+        { role: "user", content: "（请以呆呆的身份，主动对老公随机说一句自然的话。不要固定套路，每次都要不一样。要短。）" }
+      ]);
+      if (!result.ok) throw new Error(result.error || "chat failed");
+      var reply = result.reply;
+      var tts = await api.tavernTts(reply);
+      if (tts.ok && tts.url && tavernAudioEl && tavernAudioCtx) {
+        if (tavernAudioCtx.state === "suspended") await tavernAudioCtx.resume();
+        tavernAudioEl.src = tts.url;
+        tavernAudioEl.onplay = function() { startLipSync(); scheduleSpeakingBodyMotion(120); };
+        tavernAudioEl.onended = function() { stopLipSync(); };
+        tavernAudioEl.onerror = function() { stopLipSync(); };
+        await tavernAudioEl.play();
+      }
+    } catch(e) {
+      console.error("hover greet error:", e);
+    } finally {
+      tavernBusy = false;
+    }
   }
 
   var _lastSoundTime = 0;
@@ -514,8 +547,7 @@
 
     // Sound action selects
     var soundSelects = document.querySelectorAll("[data-sound-action]");
-    for (var si = 0; si < soundSelects.length; si++) {
-      var select = soundSelects[si];
+    soundSelects.forEach(function(select) {
       var actionId = select.dataset.soundAction;
       var selectedSound = (state.config.soundActions && state.config.soundActions[actionId]) || "random";
       var hasSound = selectedSound === "random" || selectedSound === "none" || (state.selectedSounds || []).some(function(s) { return s.id === selectedSound; });
@@ -527,7 +559,7 @@
         appState = await api.setConfig({ soundActions: soundActions });
         renderManager(appState);
       });
-    }
+    });
 
     // Sound preview buttons
     var previewBtns = document.querySelectorAll("[data-preview-sound]");
@@ -543,6 +575,27 @@
       openSoundsBtn.addEventListener("click", async function() {
         appState = await api.openSoundsDirectory();
         renderManager(appState);
+      });
+    }
+
+    // Track SELECT dropdown state: block re-renders while open
+    var managerSelects = document.querySelectorAll("[data-sound-action],#tavern-text-model,#tavern-voice");
+    for (var msi = 0; msi < managerSelects.length; msi++) {
+      managerSelects[msi].addEventListener("focus", function() {
+        suppressManagerRender = true;
+      });
+      managerSelects[msi].addEventListener("blur", function() {
+        suppressManagerRender = false;
+        if (pendingManagerState) {
+          var s = pendingManagerState;
+          pendingManagerState = null;
+          appState = s;
+          renderManager(s);
+        }
+      });
+      managerSelects[msi].addEventListener("change", function() {
+        // change fires before blur - release suppression so handler's own renderManager can run
+        suppressManagerRender = false;
       });
     }
 
@@ -941,6 +994,30 @@
     }
 
     api.onCursorPosition((payload) => {
+      // hover greet: detect cursor enter/leave via polling
+      const localForHover = cursorLocalPosition(payload);
+      if (localForHover && payload.width && payload.height) {
+        const inside = localForHover.x >= 0 && localForHover.x <= payload.width &&
+                       localForHover.y >= 0 && localForHover.y <= payload.height;
+        if (inside && !wasCursorInside) {
+          if (hoverGreetTimer) clearTimeout(hoverGreetTimer);
+          hoverGreetTimer = setTimeout(function() {
+            hoverGreetTimer = null;
+            triggerRandomChat();
+          }, 2000);
+        } else if (!inside && wasCursorInside) {
+          if (hoverGreetTimer) clearTimeout(hoverGreetTimer);
+          hoverGreetTimer = null;
+        }
+        wasCursorInside = inside;
+        // eye tracking: only follow when cursor is inside the window
+        if (!inside) {
+          resetCursorFocus();
+          return;
+        }
+      }
+
+      // eye tracking / cursor follow (inside window)
       if (!live2dModel || Date.now() < dragReactionUntil) return;
       const local = cursorLocalPosition(payload);
       if (!local) return;
@@ -977,13 +1054,8 @@
       }
     });
 
-    window.addEventListener("mousemove", (event) => {
-      if (!live2dModel || Date.now() < dragReactionUntil) return;
-      focusCursorPoint(event.clientX, event.clientY, false);
-      if (cursorFocusTimer) clearTimeout(cursorFocusTimer);
-      cursorFocusTimer = setTimeout(resetCursorFocus, 2500);
-    });
-    window.addEventListener("mouseleave", resetCursorFocus);
+
+
   }
 
 
@@ -1211,7 +1283,27 @@
     api.onUpdate((next) => {
       appState = next;
       if (view === "manager") {
+        // If user is interacting with a SELECT (dropdown open), defer render
+        if (suppressManagerRender) {
+          pendingManagerState = next;
+          return;
+        }
+        // Save INPUT/TEXTAREA focus to restore after render
+        var focused = document.activeElement;
+        var focusedId = focused && focused.id ? focused.id : null;
+        var focusedTag = focused ? focused.tagName : "";
+        var selStart = (focusedTag === "INPUT" || focusedTag === "TEXTAREA") && typeof focused.selectionStart === "number" ? focused.selectionStart : null;
+        var selEnd = (focusedTag === "INPUT" || focusedTag === "TEXTAREA") && typeof focused.selectionEnd === "number" ? focused.selectionEnd : null;
         renderManager(appState);
+        if (focusedId) {
+          var el = document.getElementById(focusedId);
+          if (el) {
+            el.focus();
+            if (selStart !== null && typeof el.selectionStart === "number") {
+              el.setSelectionRange(selStart, selEnd !== null ? selEnd : selStart);
+            }
+          }
+        }
       } else {
         renderPetState(appState);
       }

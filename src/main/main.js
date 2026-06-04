@@ -1,6 +1,4 @@
 const path = require("node:path");
-const fs = require("node:fs");
-const { pathToFileURL } = require("node:url");
 const { app, BrowserWindow, dialog, ipcMain, Menu, shell, screen, Tray } = require("electron");
 const { createCodexSessionMonitor } = require("./codex-session-monitor");
 const { createConfigStore } = require("./config-store");
@@ -37,46 +35,12 @@ function selectedModel() {
   return config.selectedModelId ? modelRegistry.get(config.selectedModelId) : null;
 }
 
-function selectedModelSounds() {
-  const model = selectedModel();
-  if (!model || !model.directory || !fs.existsSync(model.directory)) return [];
-
-  const sounds = [];
-  function walk(dir, depth) {
-    if (depth > 4 || sounds.length >= 64) return;
-    let entries = [];
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        walk(full, depth + 1);
-      } else if (/\.(mp3|wav|ogg)$/i.test(entry.name)) {
-        const relativePath = path.relative(model.directory, full).split(path.sep).join("/");
-        sounds.push({
-          id: relativePath,
-          name: entry.name,
-          relativePath,
-          url: pathToFileURL(full).href
-        });
-      }
-    }
-  }
-
-  walk(model.directory, 0);
-  return sounds.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
-}
-
 function rendererPayload() {
   return {
     appVersion: app.getVersion(),
     config,
     models: modelRegistry.list(),
     selectedModel: selectedModel(),
-    selectedSounds: selectedModelSounds(),
     status: statusPoller ? statusPoller.getLastStatus() : { sources: [] }
   };
 }
@@ -340,7 +304,7 @@ app.whenReady().then(() => {
   });
 
   // 首次启动：将预制模型复制到 userData + 注册，避免中文路径 file:// 加载问题
-  const fsSync = fs;
+  const fsSync = require("node:fs");
   const modelsDir = path.join(app.getPath("userData"), "models");
   const registryFile = path.join(app.getPath("userData"), "models.json");
   const existingRegistry = (function() { try { return JSON.parse(fsSync.readFileSync(registryFile, "utf8")); } catch(e) { return { models: [] }; } })();

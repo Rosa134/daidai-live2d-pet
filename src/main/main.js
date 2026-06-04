@@ -1,7 +1,9 @@
 const path = require("node:path");
+const fs = require("node:fs");
+const { pathToFileURL } = require("node:url");
 const { app, BrowserWindow, dialog, ipcMain, Menu, shell, screen, Tray } = require("electron");
 const { createCodexSessionMonitor } = require("./codex-session-monitor");
-const { createConfigStore } = require("./config-store");
+const { MIN_PET_WINDOW, createConfigStore } = require("./config-store");
 const { createModelRegistry } = require("./model-registry");
 const { createStatusBridge } = require("./status-bridge");
 const { createStatusPoller } = require("./status-poller");
@@ -35,12 +37,29 @@ function selectedModel() {
   return config.selectedModelId ? modelRegistry.get(config.selectedModelId) : null;
 }
 
+function scanSoundsDir() {
+  const dir = path.join(app.getPath("userData"), "sounds");
+  if (!fs.existsSync(dir)) return [];
+  const sounds = [];
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isFile() && /\.(mp3|wav|ogg)$/i.test(entry.name)) {
+        const full = path.join(dir, entry.name);
+        sounds.push({ id: entry.name, name: entry.name, url: pathToFileURL(full).href });
+      }
+    }
+  } catch {}
+  return sounds.sort((a, b) => a.name.localeCompare(b.name));
+}
+
 function rendererPayload() {
   return {
     appVersion: app.getVersion(),
     config,
     models: modelRegistry.list(),
     selectedModel: selectedModel(),
+    selectedSounds: scanSoundsDir(),
     status: statusPoller ? statusPoller.getLastStatus() : { sources: [] }
   };
 }
@@ -77,11 +96,35 @@ function savePetBounds() {
   broadcast();
 }
 
+function resolvePetWindowBounds(savedBounds) {
+  let width = Math.max(MIN_PET_WINDOW.width, Number(savedBounds.width || 520));
+  let height = Math.max(MIN_PET_WINDOW.height, Number(savedBounds.height || 620));
+  const point = {
+    x: Number.isFinite(savedBounds.x) ? savedBounds.x : 0,
+    y: Number.isFinite(savedBounds.y) ? savedBounds.y : 0
+  };
+  const display = screen.getDisplayMatching({ ...point, width, height });
+  const area = display.workArea;
+  width = Math.min(width, area.width);
+  height = Math.min(height, area.height);
+
+  const result = { width, height };
+  if (Number.isFinite(savedBounds.x)) {
+    result.x = Math.round(Math.min(Math.max(savedBounds.x, area.x), area.x + area.width - width));
+  }
+  if (Number.isFinite(savedBounds.y)) {
+    result.y = Math.round(Math.min(Math.max(savedBounds.y, area.y), area.y + area.height - height));
+  }
+  return result;
+}
+
 function createPetWindow() {
-  const bounds = config.petWindow || {};
+  const bounds = resolvePetWindowBounds(config.petWindow || {});
   petWindow = new BrowserWindow({
-    width: Number(bounds.width || 520),
-    height: Number(bounds.height || 620),
+    width: bounds.width,
+    height: bounds.height,
+    minWidth: MIN_PET_WINDOW.width,
+    minHeight: MIN_PET_WINDOW.height,
     x: Number.isFinite(bounds.x) ? bounds.x : undefined,
     y: Number.isFinite(bounds.y) ? bounds.y : undefined,
     frame: false,
@@ -278,6 +321,12 @@ function registerIpc() {
     await shell.openPath(modelRegistry.openDirectoryPath());
     return rendererPayload();
   });
+  ipcMain.handle("model:open-sounds-directory", async () => {
+    const dir = path.join(app.getPath("userData"), "sounds");
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    await shell.openPath(dir);
+    return rendererPayload();
+  });
   ipcMain.handle("pet:show", () => {
     showPet();
     return rendererPayload();
@@ -304,7 +353,7 @@ app.whenReady().then(() => {
   });
 
   // 首次启动：将预制模型复制到 userData + 注册，避免中文路径 file:// 加载问题
-  const fsSync = require("node:fs");
+  const fsSync = fs;
   const modelsDir = path.join(app.getPath("userData"), "models");
   const registryFile = path.join(app.getPath("userData"), "models.json");
   const existingRegistry = (function() { try { return JSON.parse(fsSync.readFileSync(registryFile, "utf8")); } catch(e) { return { models: [] }; } })();

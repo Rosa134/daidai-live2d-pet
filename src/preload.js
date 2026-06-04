@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld("daidaiPet", {
   importModelDirectory: () => ipcRenderer.invoke("model:import-directory"),
   selectModel: (modelId) => ipcRenderer.invoke("model:select", modelId),
   openModelsDirectory: () => ipcRenderer.invoke("model:open-directory"),
+  openSoundsDirectory: () => ipcRenderer.invoke("model:open-sounds-directory"),
   showPet: () => ipcRenderer.invoke("pet:show"),
   hidePet: () => ipcRenderer.invoke("pet:hide"),
   onUpdate: (callback) => subscribe("app:update", callback),

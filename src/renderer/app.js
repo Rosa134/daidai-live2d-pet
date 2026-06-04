@@ -123,34 +123,56 @@
     focusLive2d(nx, ny, instant);
   }
 
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
   function resetCursorFocus() {
     focusLive2d(0, 0, false);
   }
 
-  function playLive2dMotion(group, index) {
+  function playLive2dMotion(group, index, actionKind) {
     if (!live2dModel || !group) return;
     try {
       live2dModel.motion(group, index || 0);
       if (loadedModelId && (group === 'tap_body' || group === 'flick_head')) {
-        tryPlayModelSound();
+        tryPlayModelSound(actionKind || group);
       }
     } catch {}
   }
 
   var _lastSoundTime = 0;
-  function tryPlayModelSound() {
-    if (appState && appState.config && appState.config.soundEnabled === false) return;
+  function resolveSoundUrl(actionId) {
+    var sounds = (appState && appState.selectedSounds) || [];
+    if (!sounds.length) return null;
+    var actions = (appState && appState.config && appState.config.soundActions) || {};
+    var selection = actions[actionId] || "random";
+    if (selection === "none") return null;
+    if (selection !== "random") {
+      var selected = sounds.find(function(s) { return s.id === selection; });
+      if (selected) return selected.url;
+    }
+    return sounds[Math.floor(Math.random() * sounds.length)].url;
+  }
+
+  function playSoundUrl(url) {
+    if (!url) return;
+    var audio = new Audio(url);
+    audio.volume = 0.4;
+    audio.play().catch(function() {});
+  }
+
+  function tryPlayModelSound(actionId, preview) {
+    if (!preview && appState && appState.config && appState.config.soundEnabled === false) return;
     var now = Date.now();
-    if (now - _lastSoundTime < 800) return;
+    if (!preview && now - _lastSoundTime < 800) return;
     _lastSoundTime = now;
     try {
-      var modelDir = loadedModelId || 'rem';
-      var base = '../../user-data/models/' + modelDir + '/sounds/';
-      var sounds = [base + 'haru_normal_01.mp3', base + 'haru_normal_02.mp3', base + 'haru_normal_03.mp3'];
-      var pick = sounds[Math.floor(Math.random() * sounds.length)];
-      var audio = new Audio(pick);
-      audio.volume = 0.4;
-      audio.play().catch(function() {});
+      playSoundUrl(resolveSoundUrl(actionId));
     } catch (e) {}
   }
 
@@ -182,13 +204,61 @@
     }
 
     if (motion !== "idle" && changed) {
-      playLive2dMotion(motion, 0);
+      playLive2dMotion(motion, 0, kind);
     }
     statusMotionKind = kind;
 
     if (!statusMotionTimer && (kind === "thinking" || kind === "waiting-permission" || kind === "waiting-input")) {
       statusMotionTimer = setInterval(() => playLive2dMotion("flick_head", 1), 2500);
     }
+  }
+
+  var SOUND_ACTIONS = [
+    { id: "thinking", name: "思考中", detail: "AI 正在推理时触发" },
+    { id: "tool_use", name: "运行工具", detail: "执行 shell_command 等工具时触发" },
+    { id: "replying", name: "回复中", detail: "AI 正在输出回复时触发" },
+    { id: "complete", name: "完成", detail: "任务完成后最后一次气泡更新时触发" },
+    { id: "error", name: "出错", detail: "会话报错时触发" },
+    { id: "waiting", name: "等待确认", detail: "等待用户授权/确认时触发" },
+    { id: "drag", name: "拖动宠物", detail: "用户拖动窗口时触发" }
+  ];
+
+  function renderSoundSettings(state) {
+    var sounds = state.selectedSounds || [];
+    var options = [
+      '<option value="random">随机播放</option>',
+      '<option value="none">此动作静音</option>',
+      sounds.map(function(s) { return '<option value="' + escapeHtml(s.id) + '">' + escapeHtml(s.name) + '</option>'; }).join("")
+    ].join("");
+
+    if (!sounds.length) {
+      return [
+        '<section class="section"><h2>音效配置</h2>',
+        '<div class="sound-empty">声音库还没有音频。点击下方按钮打开声音目录，放入 .mp3 /.wav /.ogg 文件，会自动出现在这里。</div>',
+        '<div style="margin-top:8px"><button id="open-sounds-dir">打开声音目录</button></div>',
+        '</section>'
+      ].join("");
+    }
+
+    var rows = SOUND_ACTIONS.map(function(action) {
+      var val = (state.config.soundActions && state.config.soundActions[action.id]) || "random";
+      var hasValue = val === "random" || val === "none" || sounds.some(function(s) { return s.id === val; });
+      if (!hasValue) val = "random";
+      return [
+        '<div class="sound-row">',
+        '  <div><strong>' + escapeHtml(action.name) + '</strong><span class="muted">' + escapeHtml(action.detail) + '</span></div>',
+        '  <select data-sound-action="' + escapeHtml(action.id) + '">' + options + '</select>',
+        '  <button type="button" data-preview-sound="' + escapeHtml(action.id) + '">试听</button>',
+        '</div>'
+      ].join("");
+    }).join("");
+
+    return [
+      '<section class="section">',
+      '  <div class="section-head"><h2>音效配置</h2><button id="open-sounds-dir">打开声音目录</button></div>',
+      '  <div class="sound-list">' + rows + '</div>',
+      '</section>'
+    ].join("");
   }
 
   function renderManager(state) {
@@ -241,6 +311,7 @@
               </label>
             </div>
           </section>
+          ${renderSoundSettings(state)}
           <section class="section">
             <h2>Live2D 模型</h2>
             <div id="model-list" class="model-list"></div>
@@ -270,7 +341,42 @@
     soundEnabled.addEventListener("change", () => api.setConfig({ soundEnabled: soundEnabled.checked }));
     statusUrl.addEventListener("change", () => api.setConfig({ statusPollUrl: statusUrl.value.trim() }));
 
+    // Sound action selects
+    var soundSelects = document.querySelectorAll("[data-sound-action]");
+    for (var si = 0; si < soundSelects.length; si++) {
+      var select = soundSelects[si];
+      var actionId = select.dataset.soundAction;
+      var selectedSound = (state.config.soundActions && state.config.soundActions[actionId]) || "random";
+      var hasSound = selectedSound === "random" || selectedSound === "none" || (state.selectedSounds || []).some(function(s) { return s.id === selectedSound; });
+      select.value = hasSound ? selectedSound : "random";
+      select.addEventListener("change", async function() {
+        var patch = {};
+        patch[actionId] = select.value;
+        var soundActions = Object.assign({}, appState.config.soundActions || {}, patch);
+        appState = await api.setConfig({ soundActions: soundActions });
+        renderManager(appState);
+      });
+    }
+
+    // Sound preview buttons
+    var previewBtns = document.querySelectorAll("[data-preview-sound]");
+    for (var pi = 0; pi < previewBtns.length; pi++) {
+      previewBtns[pi].addEventListener("click", function() {
+        tryPlayModelSound(this.dataset.previewSound, true);
+      });
+    }
+
+    // Open sounds directory
+    var openSoundsBtn = document.getElementById("open-sounds-dir");
+    if (openSoundsBtn) {
+      openSoundsBtn.addEventListener("click", async function() {
+        appState = await api.openSoundsDirectory();
+        renderManager(appState);
+      });
+    }
+
     renderModelList(state);
+
   }
 
   function renderModelList(state) {
@@ -688,7 +794,7 @@
       const now = Date.now();
       if (now - lastDragMotionAt > 900) {
         lastDragMotionAt = now;
-        playLive2dMotion("flick_head", 0);
+        playLive2dMotion("flick_head", 0, "drag");
       }
     });
 

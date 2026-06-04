@@ -1,10 +1,24 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
+const MIN_PET_WINDOW = {
+  width: 420,
+  height: 500
+};
+
 const DEFAULT_CONFIG = {
   petVisible: true,
   alwaysOnTop: true,
   soundEnabled: true,
+  soundActions: {
+    thinking: "random",
+    tool_use: "random",
+    replying: "random",
+    complete: "random",
+    error: "random",
+    waiting: "random",
+    drag: "random"
+  },
   opacity: 1,
   selectedModelId: "rem",
   statusPollUrl: "http://127.0.0.1:23334/status",
@@ -44,7 +58,14 @@ function mergeConfig(current, patch) {
     ...(current && current.petWindow),
     ...(patch && patch.petWindow)
   };
+  next.petWindow.width = Math.max(MIN_PET_WINDOW.width, Number(next.petWindow.width || DEFAULT_CONFIG.petWindow.width));
+  next.petWindow.height = Math.max(MIN_PET_WINDOW.height, Number(next.petWindow.height || DEFAULT_CONFIG.petWindow.height));
   next.opacity = Math.min(1, Math.max(0.2, Number(next.opacity || 1)));
+  next.soundActions = {
+    ...DEFAULT_CONFIG.soundActions,
+    ...(current && current.soundActions),
+    ...(patch && patch.soundActions)
+  };
   next.soundEnabled = next.soundEnabled !== false;
   return next;
 }
@@ -66,6 +87,7 @@ function createConfigStore(userDataDir) {
 
 module.exports = {
   DEFAULT_CONFIG,
+  MIN_PET_WINDOW,
   createConfigStore,
   mergeConfig,
   readJson,

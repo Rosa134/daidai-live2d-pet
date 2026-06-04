@@ -12,15 +12,37 @@
   let cursorFocusTimer = null;
   let dragReactionUntil = 0;
   let lastDragMotionAt = 0;
+  let tavernHistory = [];
+  let tavernBusy = false;
+  let tavernAudioEl = null;
+  let tavernAudioCtx = null;
+  let tavernAnalyser = null;
+  let tavernLipSyncTicker = null;
+  let tavernLipSyncData = null;
+  let tavernLipSyncApplyHandler = null;
+  let tavernLipSyncModel = null;
+  let tavernLastMouthValue = 0;
+  let randomBodyMotionTimer = null;
+  let speakingBodyMotionTimer = null;
   let statusMotionKind = "idle";
   let statusMotionTimer = null;
   // 全局错误捕获 - 显示在宠物窗上
   window.addEventListener("error", function(e) {
+    try {
+      if (api && api.reportRendererError) {
+        api.reportRendererError({
+          message: e.message || "",
+          filename: e.filename || "",
+          lineno: e.lineno || 0,
+          colno: e.colno || 0
+        });
+      }
+    } catch {}
     var el = document.getElementById("empty-pet");
     if (el) {
       el.style.display = "grid";
-      el.querySelector("strong").textContent = "JS Error";
-      el.querySelector("span").textContent = (e.filename||"") + ":" + (e.lineno||"") + " " + (e.message||"");
+      el.querySelector("strong").textContent = `JS Error ${e.lineno || ""}:${e.colno || ""}`;
+      el.querySelector("span").textContent = e.message || "未知错误";
     }
   });
   const lastReply = { codex: "", claude: "" };
@@ -135,14 +157,102 @@
     focusLive2d(0, 0, false);
   }
 
-  function playLive2dMotion(group, index, actionKind) {
+  function playLive2dMotion(group, index, actionKind, options) {
     if (!live2dModel || !group) return;
+    var silent = options && options.silent;
     try {
       live2dModel.motion(group, index || 0);
-      if (loadedModelId && (group === 'tap_body' || group === 'flick_head')) {
+      if (!silent && loadedModelId && (group === 'tap_body' || group === 'flick_head')) {
         tryPlayModelSound(actionKind || group);
       }
     } catch {}
+  }
+
+  function motionDefinitions() {
+    try {
+      var manager = live2dModel && live2dModel.internalModel && live2dModel.internalModel.motionManager;
+      return manager && manager.definitions ? manager.definitions : {};
+    } catch(e) {
+      return {};
+    }
+  }
+
+  function motionCount(group) {
+    var definitions = motionDefinitions();
+    var entries = definitions && definitions[group];
+    return Array.isArray(entries) ? entries.length : 0;
+  }
+
+  function pickRandomMotion(groups) {
+    var candidates = [];
+    for (var i = 0; i < groups.length; i++) {
+      var count = motionCount(groups[i]);
+      for (var index = 0; index < count; index++) {
+        candidates.push({ group: groups[i], index: index });
+      }
+    }
+    if (!candidates.length) {
+      var definitions = motionDefinitions();
+      Object.keys(definitions).forEach(function(group) {
+        var count = motionCount(group);
+        for (var index = 0; index < count; index++) {
+          candidates.push({ group: group, index: index });
+        }
+      });
+    }
+    return candidates.length ? candidates[Math.floor(Math.random() * candidates.length)] : null;
+  }
+
+  function playRandomBodyMotion(mode) {
+    var groups = mode === "speaking"
+      ? ["talk", "tap_body", "Tap", "tap", "flick_head"]
+      : ["idle", "Idle", "rest", "sleepy", "tap_body", "Tap", "tap"];
+    var motion = pickRandomMotion(groups);
+    if (!motion) return false;
+    playLive2dMotion(motion.group, motion.index, null, { silent: true });
+    return true;
+  }
+
+  function hasActiveAgentStatus() {
+    var item = primaryStatusItem(appState && appState.status);
+    var kind = item && item.kind ? item.kind : "idle";
+    return kind !== "idle" && kind !== "complete" && kind !== "completed";
+  }
+
+  function isTavernAudioPlaying() {
+    return Boolean(tavernAudioEl && !tavernAudioEl.paused && !tavernAudioEl.ended);
+  }
+
+  function scheduleRandomBodyMotion(delay) {
+    if (randomBodyMotionTimer) clearTimeout(randomBodyMotionTimer);
+    randomBodyMotionTimer = setTimeout(function() {
+      randomBodyMotionTimer = null;
+      if (live2dModel && !tavernBusy && !isTavernAudioPlaying() && !hasActiveAgentStatus() && Date.now() >= dragReactionUntil) {
+        playRandomBodyMotion("idle");
+      }
+      if (live2dModel) scheduleRandomBodyMotion(9000 + Math.random() * 9000);
+    }, delay || (7000 + Math.random() * 7000));
+  }
+
+  function clearRandomBodyMotion() {
+    if (randomBodyMotionTimer) clearTimeout(randomBodyMotionTimer);
+    randomBodyMotionTimer = null;
+  }
+
+  function scheduleSpeakingBodyMotion(delay) {
+    if (speakingBodyMotionTimer) clearTimeout(speakingBodyMotionTimer);
+    speakingBodyMotionTimer = setTimeout(function() {
+      speakingBodyMotionTimer = null;
+      if (tavernAudioEl && !tavernAudioEl.paused && !tavernAudioEl.ended) {
+        playRandomBodyMotion("speaking");
+        scheduleSpeakingBodyMotion(3200 + Math.random() * 2600);
+      }
+    }, delay || 250);
+  }
+
+  function clearSpeakingBodyMotion() {
+    if (speakingBodyMotionTimer) clearTimeout(speakingBodyMotionTimer);
+    speakingBodyMotionTimer = null;
   }
 
   var _lastSoundTime = 0;
@@ -261,6 +371,35 @@
     ].join("");
   }
 
+  function selectedOption(value, expected) {
+    return value === expected ? " selected" : "";
+  }
+
+  function renderTavernSettings(state) {
+    var tavern = (state.config && state.config.tavern) || {};
+    var voice = tavern.voice || "zh_female_tianmeitaozi_uranus_bigtts";
+    var model = tavern.textModel || "deepseek-chat";
+    return [
+      '<section class="section">',
+      '  <h2>聊天模型与角色卡</h2>',
+      '  <div class="tavern-settings">',
+      '    <label class="config-field"><span><strong>文字接口</strong><span class="muted">OpenAI 兼容 /chat/completions 地址</span></span><input id="tavern-text-base-url" type="text" value="' + escapeHtml(tavern.textBaseUrl || "https://api.deepseek.com/v1") + '" /></label>',
+      '    <label class="config-field"><span><strong>文字 API Key</strong><span class="muted">仅保存到本机 config.json，不写入源码</span></span><input id="tavern-text-api-key" type="password" value="' + escapeHtml(tavern.textApiKey || "") + '" /></label>',
+      '    <label class="config-field"><span><strong>文字模型</strong><span class="muted">DeepSeek V4 Flash 建议使用 deepseek-chat，已关闭深度思考</span></span><select id="tavern-text-model"><option value="deepseek-chat"' + selectedOption(model, "deepseek-chat") + '>DeepSeek V4 Flash / deepseek-chat</option><option value="default"' + selectedOption(model, "default") + '>OpenAI 兼容 default</option><option value="custom"' + (model !== "deepseek-chat" && model !== "default" ? " selected" : "") + '>自定义</option></select></label>',
+      '    <label class="config-field"><span><strong>自定义模型 ID</strong><span class="muted">选择“自定义”时使用</span></span><input id="tavern-custom-model" type="text" value="' + escapeHtml(model !== "deepseek-chat" && model !== "default" ? model : "") + '" /></label>',
+      '    <label class="config-field"><span><strong>回复长度</strong><span class="muted">越短延迟越低，建议 120-200</span></span><input id="tavern-max-tokens" type="number" min="32" max="2048" step="16" value="' + escapeHtml(tavern.textMaxTokens || 160) + '" /></label>',
+      '    <label class="config-field"><span><strong>温度</strong><span class="muted">角色聊天建议 0.7-0.9</span></span><input id="tavern-temperature" type="number" min="0" max="2" step="0.1" value="' + escapeHtml(tavern.textTemperature || 0.8) + '" /></label>',
+      '    <label class="config-field config-field-wide"><span><strong>角色卡提示词</strong><span class="muted">要求只输出要说的话，不要动作描写</span></span><textarea id="tavern-role-prompt" rows="5">' + escapeHtml(tavern.rolePrompt || "") + '</textarea></label>',
+      '    <label class="config-field"><span><strong>火山 AppID</strong><span class="muted">语音合成应用 ID</span></span><input id="tavern-tts-appid" type="text" value="' + escapeHtml(tavern.ttsAppId || "3931757810") + '" /></label>',
+      '    <label class="config-field"><span><strong>火山 Token</strong><span class="muted">仅保存到本机 config.json</span></span><input id="tavern-tts-token" type="password" value="' + escapeHtml(tavern.ttsToken || "") + '" /></label>',
+      '    <label class="config-field"><span><strong>音色</strong><span class="muted">桃桃为默认音色</span></span><select id="tavern-voice"><option value="zh_female_tianmeitaozi_uranus_bigtts"' + selectedOption(voice, "zh_female_tianmeitaozi_uranus_bigtts") + '>甜美桃桃</option><option value="zh_female_vv_uranus_bigtts"' + selectedOption(voice, "zh_female_vv_uranus_bigtts") + '>Vivi</option><option value="zh_female_linjianvhai_uranus_bigtts"' + selectedOption(voice, "zh_female_linjianvhai_uranus_bigtts") + '>邻家女孩</option><option value="custom"' + (["zh_female_tianmeitaozi_uranus_bigtts","zh_female_vv_uranus_bigtts","zh_female_linjianvhai_uranus_bigtts"].indexOf(voice) === -1 ? " selected" : "") + '>自定义</option></select></label>',
+      '    <label class="config-field"><span><strong>自定义音色 ID</strong><span class="muted">选择“自定义”时使用</span></span><input id="tavern-custom-voice" type="text" value="' + escapeHtml(["zh_female_tianmeitaozi_uranus_bigtts","zh_female_vv_uranus_bigtts","zh_female_linjianvhai_uranus_bigtts"].indexOf(voice) === -1 ? voice : "") + '" /></label>',
+      '    <label class="config-field"><span><strong>语速</strong><span class="muted">1 为正常</span></span><input id="tavern-tts-speed" type="number" min="0.5" max="3" step="0.1" value="' + escapeHtml(tavern.ttsSpeed || 1) + '" /></label>',
+      '  </div>',
+      '</section>'
+    ].join("");
+  }
+
   function renderManager(state) {
     root.innerHTML = `
       <div class="manager-shell">
@@ -312,6 +451,7 @@
             </div>
           </section>
           ${renderSoundSettings(state)}
+          ${renderTavernSettings(state)}
           <section class="section">
             <h2>Live2D 模型</h2>
             <div id="model-list" class="model-list"></div>
@@ -340,6 +480,37 @@
     opacity.addEventListener("input", () => api.setConfig({ opacity: Number(opacity.value) }));
     soundEnabled.addEventListener("change", () => api.setConfig({ soundEnabled: soundEnabled.checked }));
     statusUrl.addEventListener("change", () => api.setConfig({ statusPollUrl: statusUrl.value.trim() }));
+
+    function collectTavernConfig() {
+      var modelSelect = document.getElementById("tavern-text-model");
+      var customModel = document.getElementById("tavern-custom-model");
+      var voiceSelect = document.getElementById("tavern-voice");
+      var customVoice = document.getElementById("tavern-custom-voice");
+      var model = modelSelect && modelSelect.value === "custom" ? (customModel.value.trim() || "deepseek-chat") : modelSelect.value;
+      var voice = voiceSelect && voiceSelect.value === "custom" ? (customVoice.value.trim() || "zh_female_tianmeitaozi_uranus_bigtts") : voiceSelect.value;
+      return {
+        textBaseUrl: document.getElementById("tavern-text-base-url").value.trim(),
+        textApiKey: document.getElementById("tavern-text-api-key").value.trim(),
+        textModel: model,
+        textMaxTokens: Number(document.getElementById("tavern-max-tokens").value || 160),
+        textTemperature: Number(document.getElementById("tavern-temperature").value || 0.8),
+        rolePrompt: document.getElementById("tavern-role-prompt").value.trim(),
+        ttsAppId: document.getElementById("tavern-tts-appid").value.trim(),
+        ttsToken: document.getElementById("tavern-tts-token").value.trim(),
+        voice: voice,
+        ttsSpeed: Number(document.getElementById("tavern-tts-speed").value || 1),
+        ttsCluster: "volcano_tts"
+      };
+    }
+
+    async function saveTavernConfig() {
+      appState = await api.setConfig({ tavern: collectTavernConfig() });
+    }
+
+    var tavernInputs = document.querySelectorAll("#tavern-text-base-url,#tavern-text-api-key,#tavern-text-model,#tavern-custom-model,#tavern-max-tokens,#tavern-temperature,#tavern-role-prompt,#tavern-tts-appid,#tavern-tts-token,#tavern-voice,#tavern-custom-voice,#tavern-tts-speed");
+    for (var ti = 0; ti < tavernInputs.length; ti++) {
+      tavernInputs[ti].addEventListener("change", saveTavernConfig);
+    }
 
     // Sound action selects
     var soundSelects = document.querySelectorAll("[data-sound-action]");
@@ -428,7 +599,7 @@
 
   function renderPetShell() {
     document.body.className = "pet-body";
-    root.innerHTML = `
+    root.innerHTML = `        <audio id="tavern-audio" style="display:none"></audio>
       <div class="pet-stage" id="pet-stage">
         <canvas id="live2d-canvas"></canvas>
         <div class="empty-pet" id="empty-pet">
@@ -446,6 +617,10 @@
             <div class="bubble-head"><span class="dot" id="dot-claude"></span><span class="bubble-title" id="title-claude"></span></div>
             <div class="bubble-text" id="text-claude"></div>
           </div>
+        </div>
+        <div class="tavern-bar" id="tavern-bar">
+          <input type="text" id="tavern-input" placeholder="和呆呆聊天..." maxlength="200" />
+          <button id="tavern-send">↵</button>
         </div>
       </div>
     `;
@@ -522,6 +697,9 @@
   }
 
   function unloadLive2dModel() {
+    clearRandomBodyMotion();
+    clearSpeakingBodyMotion();
+    stopLipSync();
     if (live2dModel) {
       try {
         if (live2dApp && live2dApp.stage) live2dApp.stage.removeChild(live2dModel);
@@ -620,6 +798,7 @@
       fitLive2dModel();
       hideLive2dError();
       updateLive2dMotion(appState && appState.status, true);
+      scheduleRandomBodyMotion(3500);
     } catch (error) {
       _loadingModelId = null;
       loadedModelId = null;
@@ -807,6 +986,218 @@
     window.addEventListener("mouseleave", resetCursorFocus);
   }
 
+
+  function initTavernAudio() {
+    if (tavernAudioEl) return;
+    tavernAudioEl = document.getElementById("tavern-audio");
+    if (!tavernAudioEl) return;
+    try {
+      var AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+      try {
+        tavernAudioCtx = new AudioContextCtor({ latencyHint: "interactive" });
+      } catch(e) {
+        tavernAudioCtx = new AudioContextCtor();
+      }
+      tavernAnalyser = tavernAudioCtx.createAnalyser();
+      tavernAnalyser.fftSize = 512;
+      tavernAnalyser.smoothingTimeConstant = 0;
+      var source = tavernAudioCtx.createMediaElementSource(tavernAudioEl);
+      source.connect(tavernAnalyser);
+      tavernAnalyser.connect(tavernAudioCtx.destination);
+    } catch(e) {}
+  }
+
+  function getLipSyncParameterIds() {
+    var ids = [];
+    try {
+      var settings = live2dModel && live2dModel.internalModel && live2dModel.internalModel.settings;
+      if (settings && typeof settings.getLipSyncParameters === "function") {
+        ids = settings.getLipSyncParameters() || [];
+      }
+    } catch(e) {}
+    ids = ids.concat(["ParamMouthOpenY", "PARAM_MOUTH_OPEN_Y"]);
+    return ids.filter(function(id, index) {
+      return id && ids.indexOf(id) === index;
+    });
+  }
+
+  function setLive2dMouthOpen(value) {
+    if (!live2dModel || !live2dModel.internalModel) return false;
+    var core = live2dModel.internalModel.coreModel;
+    if (!core) return false;
+    var ids = getLipSyncParameterIds();
+    var wrote = false;
+    for (var i = 0; i < ids.length; i++) {
+      try {
+        if (typeof core.setParameterValueById === "function") {
+          core.setParameterValueById(ids[i], value);
+          wrote = true;
+        }
+      } catch(e) {}
+      try {
+        if (typeof core.setParamFloat === "function") {
+          core.setParamFloat(ids[i], value, 1);
+          wrote = true;
+        }
+      } catch(e) {}
+    }
+    return wrote;
+  }
+
+  function applyLipSyncMouth() {
+    setLive2dMouthOpen(tavernLastMouthValue);
+  }
+
+  function updateLipSyncFrame() {
+    if (!tavernAnalyser || !live2dModel || !tavernLipSyncData) return;
+    tavernAnalyser.getByteTimeDomainData(tavernLipSyncData);
+    var sum = 0;
+    for (var i = 0; i < tavernLipSyncData.length; i++) {
+      var centered = (tavernLipSyncData[i] - 128) / 128;
+      sum += centered * centered;
+    }
+    var rms = tavernLipSyncData.length ? Math.sqrt(sum / tavernLipSyncData.length) : 0;
+    var target = Math.min(1, Math.max(0, (rms - 0.018) * 9.5));
+    target = Math.pow(target, 0.72);
+    var smoothing = target > tavernLastMouthValue ? 0.65 : 0.32;
+    var value = tavernLastMouthValue + (target - tavernLastMouthValue) * smoothing;
+    tavernLastMouthValue = value;
+    if (!tavernLipSyncApplyHandler) applyLipSyncMouth();
+  }
+
+  function startLipSync() {
+    stopLipSync();
+    if (!tavernAnalyser || !live2dModel || !live2dApp) return;
+    tavernLipSyncData = new Uint8Array(tavernAnalyser.fftSize);
+    tavernLipSyncTicker = updateLipSyncFrame;
+    live2dApp.ticker.add(tavernLipSyncTicker);
+    tavernLipSyncModel = live2dModel.internalModel;
+    tavernLipSyncApplyHandler = applyLipSyncMouth;
+    try {
+      if (tavernLipSyncModel && typeof tavernLipSyncModel.on === "function") {
+        tavernLipSyncModel.on("beforeModelUpdate", tavernLipSyncApplyHandler);
+      } else {
+        tavernLipSyncApplyHandler = null;
+      }
+    } catch(e) {
+      tavernLipSyncApplyHandler = null;
+    }
+  }
+
+  function stopLipSync() {
+    clearSpeakingBodyMotion();
+    if (tavernLipSyncTicker && live2dApp) {
+      live2dApp.ticker.remove(tavernLipSyncTicker);
+    }
+    if (tavernLipSyncApplyHandler && tavernLipSyncModel) {
+      try {
+        if (typeof tavernLipSyncModel.off === "function") {
+          tavernLipSyncModel.off("beforeModelUpdate", tavernLipSyncApplyHandler);
+        } else if (typeof tavernLipSyncModel.removeListener === "function") {
+          tavernLipSyncModel.removeListener("beforeModelUpdate", tavernLipSyncApplyHandler);
+        }
+      } catch(e) {}
+    }
+    tavernLipSyncTicker = null;
+    tavernLipSyncData = null;
+    tavernLipSyncApplyHandler = null;
+    tavernLipSyncModel = null;
+    tavernLastMouthValue = 0;
+    setLive2dMouthOpen(0);
+  }
+
+  var _tavernAbort = null;
+
+  function stopTavern() {
+    api.tavernAbort();
+    if (tavernAudioEl) {
+      try {
+        tavernAudioEl.pause();
+        tavernAudioEl.currentTime = 0;
+      } catch(e) {}
+    }
+    stopLipSync();
+    tavernBusy = false;
+    var inputEl = document.getElementById("tavern-input");
+    if (inputEl) inputEl.disabled = false;
+    updateTavernButton();
+    if (inputEl) inputEl.focus();
+  }
+
+  async function sendTavernMessage(text) {
+    if (tavernBusy || !text || !text.trim()) return;
+    tavernBusy = true;
+    updateTavernButton();
+    var inputEl = document.getElementById("tavern-input");
+    if (inputEl) { inputEl.disabled = true; inputEl.value = ""; }
+
+    try {
+      document.getElementById("tavern-input").placeholder = "呆呆思考中...";
+      tavernHistory.push({ role: "user", content: text });
+      if (tavernHistory.length > 20) tavernHistory = tavernHistory.slice(-20);
+
+      initTavernAudio();
+
+      var result = await api.tavernChat(tavernHistory);
+      if (!result.ok) throw new Error(result.error || "chat failed");
+      var reply = result.reply;
+      tavernHistory.push({ role: "assistant", content: reply });
+
+      var tts = await api.tavernTts(reply);
+      if (tts.ok && tts.url && tavernAudioEl && tavernAudioCtx) {
+        if (tavernAudioCtx.state === "suspended") await tavernAudioCtx.resume();
+        tavernAudioEl.src = tts.url;
+        tavernAudioEl.onplay = function() { startLipSync(); scheduleSpeakingBodyMotion(120); };
+        tavernAudioEl.onended = function() { stopLipSync(); scheduleRandomBodyMotion(2000); };
+        tavernAudioEl.onerror = function() { stopLipSync(); scheduleRandomBodyMotion(2000); };
+        await tavernAudioEl.play();
+      }
+    } catch(e) {
+      console.error("Tavern error:", e);
+      var emptyEl = document.getElementById("empty-pet");
+      if (emptyEl) {
+        emptyEl.style.display = "grid";
+        emptyEl.querySelector("strong").textContent = "聊天出错";
+        emptyEl.querySelector("span").textContent = String(e.message || e).slice(0, 100);
+        setTimeout(function() { emptyEl.style.display = "none"; }, 4000);
+      }
+    } finally {
+    _tavernAbort = null;
+    tavernBusy = false;
+    if (inputEl) { inputEl.disabled = false; inputEl.placeholder = "和呆呆聊天..."; }
+    updateTavernButton();
+    if (inputEl && !tavernBusy) inputEl.focus();
+  }
+  }
+
+  function updateTavernButton() {
+    var sendBtn = document.getElementById("tavern-send");
+    if (!sendBtn) return;
+    sendBtn.textContent = tavernBusy ? "■" : "↵";
+    sendBtn.style.background = tavernBusy ? "rgba(220, 38, 38, 0.8)" : "rgba(37, 99, 235, 0.7)";
+    sendBtn.title = tavernBusy ? "打断" : "发送";
+  }
+
+  function bindTavernInput() {
+    var inputEl = document.getElementById("tavern-input");
+    var sendBtn = document.getElementById("tavern-send");
+    if (!inputEl || !sendBtn) return;
+    window.__sendTavernMessage = sendTavernMessage;
+    // Focus the Electron window for keyboard input
+    inputEl.addEventListener("focus", function() { api.tavernFocusWindow(); });
+    inputEl.addEventListener("click", function() { api.tavernFocusWindow(); inputEl.focus(); });
+    inputEl.addEventListener("focus", function() { inputEl.select(); });
+    inputEl.addEventListener("click", function() { inputEl.focus(); });
+    inputEl.addEventListener("keydown", function(e) {
+      if (e.key === "Enter") { e.preventDefault(); sendTavernMessage(inputEl.value); }
+    });
+    sendBtn.addEventListener("click", function() {
+      if (tavernBusy) { stopTavern(); }
+      else { sendTavernMessage(inputEl.value); }
+    });
+    api.tavernCleanup();
+  }
+
   async function boot() {
     appState = await api.getState();
     if (view === "manager") {
@@ -816,6 +1207,7 @@
       bindPetInteractions();
       renderPetState(appState);
     }
+    bindTavernInput();
     api.onUpdate((next) => {
       appState = next;
       if (view === "manager") {

@@ -65,7 +65,7 @@ function normalizeModelRecord(record) {
     kind: record.kind || modelKindFromFile(modelPath),
     directory,
     modelPath,
-    modelUrl: path.relative(path.join(__dirname, '..', 'renderer'), modelPath).split('\\').join('/'),
+    modelUrl: pathToFileURL(modelPath).href,
     importedAt: record.importedAt || new Date().toISOString()
   };
 }

@@ -12,15 +12,42 @@
   let cursorFocusTimer = null;
   let dragReactionUntil = 0;
   let lastDragMotionAt = 0;
+  let tavernHistory = [];
+  let tavernBusy = false;
+  let tavernAudioEl = null;
+  let tavernAudioCtx = null;
+  let tavernAnalyser = null;
+  let tavernLipSyncTicker = null;
+  let tavernLipSyncData = null;
+  let tavernLipSyncApplyHandler = null;
+  let tavernLipSyncModel = null;
+  let tavernLastMouthValue = 0;
+  let randomBodyMotionTimer = null;
+  let speakingBodyMotionTimer = null;
+  let hoverGreetTimer = null;
+  let lastHoverGreetAt = 0;
+  let wasCursorInside = false;
+  let suppressManagerRender = false;
+  let pendingManagerState = null;
   let statusMotionKind = "idle";
   let statusMotionTimer = null;
   // 全局错误捕获 - 显示在宠物窗上
   window.addEventListener("error", function(e) {
+    try {
+      if (api && api.reportRendererError) {
+        api.reportRendererError({
+          message: e.message || "",
+          filename: e.filename || "",
+          lineno: e.lineno || 0,
+          colno: e.colno || 0
+        });
+      }
+    } catch {}
     var el = document.getElementById("empty-pet");
     if (el) {
       el.style.display = "grid";
-      el.querySelector("strong").textContent = "JS Error";
-      el.querySelector("span").textContent = (e.filename||"") + ":" + (e.lineno||"") + " " + (e.message||"");
+      el.querySelector("strong").textContent = `JS Error ${e.lineno || ""}:${e.colno || ""}`;
+      el.querySelector("span").textContent = e.message || "未知错误";
     }
   });
   const lastReply = { codex: "", claude: "" };
@@ -123,34 +150,172 @@
     focusLive2d(nx, ny, instant);
   }
 
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
   function resetCursorFocus() {
     focusLive2d(0, 0, false);
   }
 
-  function playLive2dMotion(group, index) {
+  function playLive2dMotion(group, index, actionKind, options) {
     if (!live2dModel || !group) return;
+    var silent = options && options.silent;
     try {
       live2dModel.motion(group, index || 0);
-      if (loadedModelId && (group === 'tap_body' || group === 'flick_head')) {
-        tryPlayModelSound();
+      if (!silent && loadedModelId && (group === 'tap_body' || group === 'flick_head')) {
+        tryPlayModelSound(actionKind || group);
       }
     } catch {}
   }
 
+  function motionDefinitions() {
+    try {
+      var manager = live2dModel && live2dModel.internalModel && live2dModel.internalModel.motionManager;
+      return manager && manager.definitions ? manager.definitions : {};
+    } catch(e) {
+      return {};
+    }
+  }
+
+  function motionCount(group) {
+    var definitions = motionDefinitions();
+    var entries = definitions && definitions[group];
+    return Array.isArray(entries) ? entries.length : 0;
+  }
+
+  function pickRandomMotion(groups) {
+    var candidates = [];
+    for (var i = 0; i < groups.length; i++) {
+      var count = motionCount(groups[i]);
+      for (var index = 0; index < count; index++) {
+        candidates.push({ group: groups[i], index: index });
+      }
+    }
+    if (!candidates.length) {
+      var definitions = motionDefinitions();
+      Object.keys(definitions).forEach(function(group) {
+        var count = motionCount(group);
+        for (var index = 0; index < count; index++) {
+          candidates.push({ group: group, index: index });
+        }
+      });
+    }
+    return candidates.length ? candidates[Math.floor(Math.random() * candidates.length)] : null;
+  }
+
+  function playRandomBodyMotion(mode) {
+    var groups = mode === "speaking"
+      ? ["talk", "tap_body", "Tap", "tap", "flick_head"]
+      : ["idle", "Idle", "rest", "sleepy", "tap_body", "Tap", "tap"];
+    var motion = pickRandomMotion(groups);
+    if (!motion) return false;
+    playLive2dMotion(motion.group, motion.index, null, { silent: true });
+    return true;
+  }
+
+  function hasActiveAgentStatus() {
+    var item = primaryStatusItem(appState && appState.status);
+    var kind = item && item.kind ? item.kind : "idle";
+    return kind !== "idle" && kind !== "complete" && kind !== "completed";
+  }
+
+  function isTavernAudioPlaying() {
+    return Boolean(tavernAudioEl && !tavernAudioEl.paused && !tavernAudioEl.ended);
+  }
+
+  function scheduleRandomBodyMotion(delay) {
+    if (randomBodyMotionTimer) clearTimeout(randomBodyMotionTimer);
+    randomBodyMotionTimer = setTimeout(function() {
+      randomBodyMotionTimer = null;
+      if (live2dModel && !tavernBusy && !isTavernAudioPlaying() && !hasActiveAgentStatus() && Date.now() >= dragReactionUntil) {
+        playRandomBodyMotion("idle");
+      }
+      if (live2dModel) scheduleRandomBodyMotion(9000 + Math.random() * 9000);
+    }, delay || (7000 + Math.random() * 7000));
+  }
+
+  function clearRandomBodyMotion() {
+    if (randomBodyMotionTimer) clearTimeout(randomBodyMotionTimer);
+    randomBodyMotionTimer = null;
+  }
+
+  function scheduleSpeakingBodyMotion(delay) {
+    if (speakingBodyMotionTimer) clearTimeout(speakingBodyMotionTimer);
+    speakingBodyMotionTimer = setTimeout(function() {
+      speakingBodyMotionTimer = null;
+      if (tavernAudioEl && !tavernAudioEl.paused && !tavernAudioEl.ended) {
+        playRandomBodyMotion("speaking");
+        scheduleSpeakingBodyMotion(3200 + Math.random() * 2600);
+      }
+    }, delay || 250);
+  }
+
+  function clearSpeakingBodyMotion() {
+    if (speakingBodyMotionTimer) clearTimeout(speakingBodyMotionTimer);
+    speakingBodyMotionTimer = null;
+  }
+
+  async function triggerRandomChat() {
+    if (!live2dModel || tavernBusy) return;
+    if (Date.now() - lastHoverGreetAt < 7000) return;
+    lastHoverGreetAt = Date.now();
+    tavernBusy = true;
+    try {
+      initTavernAudio();
+      var result = await api.tavernChat([
+        { role: "user", content: "（请以呆呆的身份，主动对老公随机说一句自然的话。不要固定套路，每次都要不一样。要短。）" }
+      ]);
+      if (!result.ok) throw new Error(result.error || "chat failed");
+      var reply = result.reply;
+      var tts = await api.tavernTts(reply);
+      if (tts.ok && tts.url && tavernAudioEl && tavernAudioCtx) {
+        if (tavernAudioCtx.state === "suspended") await tavernAudioCtx.resume();
+        tavernAudioEl.src = tts.url;
+        tavernAudioEl.onplay = function() { startLipSync(); scheduleSpeakingBodyMotion(120); };
+        tavernAudioEl.onended = function() { stopLipSync(); };
+        tavernAudioEl.onerror = function() { stopLipSync(); };
+        await tavernAudioEl.play();
+      }
+    } catch(e) {
+      console.error("hover greet error:", e);
+    } finally {
+      tavernBusy = false;
+    }
+  }
+
   var _lastSoundTime = 0;
-  function tryPlayModelSound() {
+  function resolveSoundUrl(actionId) {
+    var sounds = (appState && appState.selectedSounds) || [];
+    if (!sounds.length) return null;
+    var actions = (appState && appState.config && appState.config.soundActions) || {};
+    var selection = actions[actionId] || "random";
+    if (selection === "none") return null;
+    if (selection !== "random") {
+      var selected = sounds.find(function(s) { return s.id === selection; });
+      if (selected) return selected.url;
+    }
+    return sounds[Math.floor(Math.random() * sounds.length)].url;
+  }
+
+  function playSoundUrl(url) {
+    if (!url) return;
+    var audio = new Audio(url);
+    audio.volume = 0.4;
+    audio.play().catch(function() {});
+  }
+
+  function tryPlayModelSound(actionId, preview) {
+    if (!preview && appState && appState.config && appState.config.soundEnabled === false) return;
     var now = Date.now();
-    if (now - _lastSoundTime < 800) return;
+    if (!preview && now - _lastSoundTime < 800) return;
     _lastSoundTime = now;
     try {
-      var model = appState && appState.selectedModel;
-      if (!model || !model.directory) return;
-      var base = model.directory.replace(/\\/g, '/') + '/sounds/';
-      var sounds = [base + 'haru_normal_01.mp3', base + 'haru_normal_02.mp3', base + 'haru_normal_03.mp3'];
-      var pick = sounds[Math.floor(Math.random() * sounds.length)];
-      var audio = new Audio('file:///' + pick);
-      audio.volume = 0.4;
-      audio.play().catch(function() {});
+      playSoundUrl(resolveSoundUrl(actionId));
     } catch (e) {}
   }
 
@@ -182,13 +347,90 @@
     }
 
     if (motion !== "idle" && changed) {
-      playLive2dMotion(motion, 0);
+      playLive2dMotion(motion, 0, kind);
     }
     statusMotionKind = kind;
 
     if (!statusMotionTimer && (kind === "thinking" || kind === "waiting-permission" || kind === "waiting-input")) {
       statusMotionTimer = setInterval(() => playLive2dMotion("flick_head", 1), 2500);
     }
+  }
+
+  var SOUND_ACTIONS = [
+    { id: "thinking", name: "思考中", detail: "AI 正在推理时触发" },
+    { id: "tool_use", name: "运行工具", detail: "执行 shell_command 等工具时触发" },
+    { id: "replying", name: "回复中", detail: "AI 正在输出回复时触发" },
+    { id: "complete", name: "完成", detail: "任务完成后最后一次气泡更新时触发" },
+    { id: "error", name: "出错", detail: "会话报错时触发" },
+    { id: "waiting", name: "等待确认", detail: "等待用户授权/确认时触发" },
+    { id: "drag", name: "拖动宠物", detail: "用户拖动窗口时触发" }
+  ];
+
+  function renderSoundSettings(state) {
+    var sounds = state.selectedSounds || [];
+    var options = [
+      '<option value="random">随机播放</option>',
+      '<option value="none">此动作静音</option>',
+      sounds.map(function(s) { return '<option value="' + escapeHtml(s.id) + '">' + escapeHtml(s.name) + '</option>'; }).join("")
+    ].join("");
+
+    if (!sounds.length) {
+      return [
+        '<section class="section"><h2>音效配置</h2>',
+        '<div class="sound-empty">声音库还没有音频。点击下方按钮打开声音目录，放入 .mp3 /.wav /.ogg 文件，会自动出现在这里。</div>',
+        '<div style="margin-top:8px"><button id="open-sounds-dir">打开声音目录</button></div>',
+        '</section>'
+      ].join("");
+    }
+
+    var rows = SOUND_ACTIONS.map(function(action) {
+      var val = (state.config.soundActions && state.config.soundActions[action.id]) || "random";
+      var hasValue = val === "random" || val === "none" || sounds.some(function(s) { return s.id === val; });
+      if (!hasValue) val = "random";
+      return [
+        '<div class="sound-row">',
+        '  <div><strong>' + escapeHtml(action.name) + '</strong><span class="muted">' + escapeHtml(action.detail) + '</span></div>',
+        '  <select data-sound-action="' + escapeHtml(action.id) + '">' + options + '</select>',
+        '  <button type="button" data-preview-sound="' + escapeHtml(action.id) + '">试听</button>',
+        '</div>'
+      ].join("");
+    }).join("");
+
+    return [
+      '<section class="section">',
+      '  <div class="section-head"><h2>音效配置</h2><button id="open-sounds-dir">打开声音目录</button></div>',
+      '  <div class="sound-list">' + rows + '</div>',
+      '</section>'
+    ].join("");
+  }
+
+  function selectedOption(value, expected) {
+    return value === expected ? " selected" : "";
+  }
+
+  function renderTavernSettings(state) {
+    var tavern = (state.config && state.config.tavern) || {};
+    var voice = tavern.voice || "zh_female_tianmeitaozi_uranus_bigtts";
+    var model = tavern.textModel || "deepseek-chat";
+    return [
+      '<section class="section">',
+      '  <h2>聊天模型与角色卡</h2>',
+      '  <div class="tavern-settings">',
+      '    <label class="config-field"><span><strong>文字接口</strong><span class="muted">OpenAI 兼容 /chat/completions 地址</span></span><input id="tavern-text-base-url" type="text" value="' + escapeHtml(tavern.textBaseUrl || "https://api.deepseek.com/v1") + '" /></label>',
+      '    <label class="config-field"><span><strong>文字 API Key</strong><span class="muted">仅保存到本机 config.json，不写入源码</span></span><input id="tavern-text-api-key" type="password" value="' + escapeHtml(tavern.textApiKey || "") + '" /></label>',
+      '    <label class="config-field"><span><strong>文字模型</strong><span class="muted">DeepSeek V4 Flash 建议使用 deepseek-chat，已关闭深度思考</span></span><select id="tavern-text-model"><option value="deepseek-chat"' + selectedOption(model, "deepseek-chat") + '>DeepSeek V4 Flash / deepseek-chat</option><option value="default"' + selectedOption(model, "default") + '>OpenAI 兼容 default</option><option value="custom"' + (model !== "deepseek-chat" && model !== "default" ? " selected" : "") + '>自定义</option></select></label>',
+      '    <label class="config-field"><span><strong>自定义模型 ID</strong><span class="muted">选择“自定义”时使用</span></span><input id="tavern-custom-model" type="text" value="' + escapeHtml(model !== "deepseek-chat" && model !== "default" ? model : "") + '" /></label>',
+      '    <label class="config-field"><span><strong>回复长度</strong><span class="muted">越短延迟越低，建议 120-200</span></span><input id="tavern-max-tokens" type="number" min="32" max="2048" step="16" value="' + escapeHtml(tavern.textMaxTokens || 160) + '" /></label>',
+      '    <label class="config-field"><span><strong>温度</strong><span class="muted">角色聊天建议 0.7-0.9</span></span><input id="tavern-temperature" type="number" min="0" max="2" step="0.1" value="' + escapeHtml(tavern.textTemperature || 0.8) + '" /></label>',
+      '    <label class="config-field config-field-wide"><span><strong>角色卡提示词</strong><span class="muted">要求只输出要说的话，不要动作描写</span></span><textarea id="tavern-role-prompt" rows="5">' + escapeHtml(tavern.rolePrompt || "") + '</textarea></label>',
+      '    <label class="config-field"><span><strong>火山 AppID</strong><span class="muted">语音合成应用 ID</span></span><input id="tavern-tts-appid" type="text" value="' + escapeHtml(tavern.ttsAppId || "3931757810") + '" /></label>',
+      '    <label class="config-field"><span><strong>火山 Token</strong><span class="muted">仅保存到本机 config.json</span></span><input id="tavern-tts-token" type="password" value="' + escapeHtml(tavern.ttsToken || "") + '" /></label>',
+      '    <label class="config-field"><span><strong>音色</strong><span class="muted">桃桃为默认音色</span></span><select id="tavern-voice"><option value="zh_female_tianmeitaozi_uranus_bigtts"' + selectedOption(voice, "zh_female_tianmeitaozi_uranus_bigtts") + '>甜美桃桃</option><option value="zh_female_vv_uranus_bigtts"' + selectedOption(voice, "zh_female_vv_uranus_bigtts") + '>Vivi</option><option value="zh_female_linjianvhai_uranus_bigtts"' + selectedOption(voice, "zh_female_linjianvhai_uranus_bigtts") + '>邻家女孩</option><option value="custom"' + (["zh_female_tianmeitaozi_uranus_bigtts","zh_female_vv_uranus_bigtts","zh_female_linjianvhai_uranus_bigtts"].indexOf(voice) === -1 ? " selected" : "") + '>自定义</option></select></label>',
+      '    <label class="config-field"><span><strong>自定义音色 ID</strong><span class="muted">选择“自定义”时使用</span></span><input id="tavern-custom-voice" type="text" value="' + escapeHtml(["zh_female_tianmeitaozi_uranus_bigtts","zh_female_vv_uranus_bigtts","zh_female_linjianvhai_uranus_bigtts"].indexOf(voice) === -1 ? voice : "") + '" /></label>',
+      '    <label class="config-field"><span><strong>语速</strong><span class="muted">1 为正常</span></span><input id="tavern-tts-speed" type="number" min="0.5" max="3" step="0.1" value="' + escapeHtml(tavern.ttsSpeed || 1) + '" /></label>',
+      '  </div>',
+      '</section>'
+    ].join("");
   }
 
   function renderManager(state) {
@@ -224,6 +466,16 @@
               </label>
               <label class="setting-row">
                 <span>
+                  <strong>声音</strong>
+                  <span class="muted">点击或动作切换时播放模型音效</span>
+                </span>
+                <span class="switch-control">
+                  <input id="sound-enabled" type="checkbox" />
+                  <span class="switch-track" aria-hidden="true"></span>
+                </span>
+              </label>
+              <label class="setting-row">
+                <span>
                   <strong>状态服务</strong>
                   <span class="muted">默认兼容本地成熟宠物 bridge 的 /status</span>
                 </span>
@@ -231,6 +483,8 @@
               </label>
             </div>
           </section>
+          ${renderSoundSettings(state)}
+          ${renderTavernSettings(state)}
           <section class="section">
             <h2>Live2D 模型</h2>
             <div id="model-list" class="model-list"></div>
@@ -241,9 +495,11 @@
 
     const alwaysOnTop = document.getElementById("always-on-top");
     const opacity = document.getElementById("opacity");
+    const soundEnabled = document.getElementById("sound-enabled");
     const statusUrl = document.getElementById("status-url");
     alwaysOnTop.checked = Boolean(state.config.alwaysOnTop);
     opacity.value = String(state.config.opacity || 1);
+    soundEnabled.checked = state.config.soundEnabled !== false;
     statusUrl.value = state.config.statusPollUrl || "";
 
     document.getElementById("import-model").addEventListener("click", async () => {
@@ -255,9 +511,96 @@
     document.getElementById("hide-pet").addEventListener("click", () => api.hidePet());
     alwaysOnTop.addEventListener("change", () => api.setConfig({ alwaysOnTop: alwaysOnTop.checked }));
     opacity.addEventListener("input", () => api.setConfig({ opacity: Number(opacity.value) }));
+    soundEnabled.addEventListener("change", () => api.setConfig({ soundEnabled: soundEnabled.checked }));
     statusUrl.addEventListener("change", () => api.setConfig({ statusPollUrl: statusUrl.value.trim() }));
 
+    function collectTavernConfig() {
+      var modelSelect = document.getElementById("tavern-text-model");
+      var customModel = document.getElementById("tavern-custom-model");
+      var voiceSelect = document.getElementById("tavern-voice");
+      var customVoice = document.getElementById("tavern-custom-voice");
+      var model = modelSelect && modelSelect.value === "custom" ? (customModel.value.trim() || "deepseek-chat") : modelSelect.value;
+      var voice = voiceSelect && voiceSelect.value === "custom" ? (customVoice.value.trim() || "zh_female_tianmeitaozi_uranus_bigtts") : voiceSelect.value;
+      return {
+        textBaseUrl: document.getElementById("tavern-text-base-url").value.trim(),
+        textApiKey: document.getElementById("tavern-text-api-key").value.trim(),
+        textModel: model,
+        textMaxTokens: Number(document.getElementById("tavern-max-tokens").value || 160),
+        textTemperature: Number(document.getElementById("tavern-temperature").value || 0.8),
+        rolePrompt: document.getElementById("tavern-role-prompt").value.trim(),
+        ttsAppId: document.getElementById("tavern-tts-appid").value.trim(),
+        ttsToken: document.getElementById("tavern-tts-token").value.trim(),
+        voice: voice,
+        ttsSpeed: Number(document.getElementById("tavern-tts-speed").value || 1),
+        ttsCluster: "volcano_tts"
+      };
+    }
+
+    async function saveTavernConfig() {
+      appState = await api.setConfig({ tavern: collectTavernConfig() });
+    }
+
+    var tavernInputs = document.querySelectorAll("#tavern-text-base-url,#tavern-text-api-key,#tavern-text-model,#tavern-custom-model,#tavern-max-tokens,#tavern-temperature,#tavern-role-prompt,#tavern-tts-appid,#tavern-tts-token,#tavern-voice,#tavern-custom-voice,#tavern-tts-speed");
+    for (var ti = 0; ti < tavernInputs.length; ti++) {
+      tavernInputs[ti].addEventListener("change", saveTavernConfig);
+    }
+
+    // Sound action selects
+    var soundSelects = document.querySelectorAll("[data-sound-action]");
+    soundSelects.forEach(function(select) {
+      var actionId = select.dataset.soundAction;
+      var selectedSound = (state.config.soundActions && state.config.soundActions[actionId]) || "random";
+      var hasSound = selectedSound === "random" || selectedSound === "none" || (state.selectedSounds || []).some(function(s) { return s.id === selectedSound; });
+      select.value = hasSound ? selectedSound : "random";
+      select.addEventListener("change", async function() {
+        var patch = {};
+        patch[actionId] = select.value;
+        var soundActions = Object.assign({}, appState.config.soundActions || {}, patch);
+        appState = await api.setConfig({ soundActions: soundActions });
+        renderManager(appState);
+      });
+    });
+
+    // Sound preview buttons
+    var previewBtns = document.querySelectorAll("[data-preview-sound]");
+    for (var pi = 0; pi < previewBtns.length; pi++) {
+      previewBtns[pi].addEventListener("click", function() {
+        tryPlayModelSound(this.dataset.previewSound, true);
+      });
+    }
+
+    // Open sounds directory
+    var openSoundsBtn = document.getElementById("open-sounds-dir");
+    if (openSoundsBtn) {
+      openSoundsBtn.addEventListener("click", async function() {
+        appState = await api.openSoundsDirectory();
+        renderManager(appState);
+      });
+    }
+
+    // Track SELECT dropdown state: block re-renders while open
+    var managerSelects = document.querySelectorAll("[data-sound-action],#tavern-text-model,#tavern-voice");
+    for (var msi = 0; msi < managerSelects.length; msi++) {
+      managerSelects[msi].addEventListener("focus", function() {
+        suppressManagerRender = true;
+      });
+      managerSelects[msi].addEventListener("blur", function() {
+        suppressManagerRender = false;
+        if (pendingManagerState) {
+          var s = pendingManagerState;
+          pendingManagerState = null;
+          appState = s;
+          renderManager(s);
+        }
+      });
+      managerSelects[msi].addEventListener("change", function() {
+        // change fires before blur - release suppression so handler's own renderManager can run
+        suppressManagerRender = false;
+      });
+    }
+
     renderModelList(state);
+
   }
 
   function renderModelList(state) {
@@ -309,7 +652,7 @@
 
   function renderPetShell() {
     document.body.className = "pet-body";
-    root.innerHTML = `
+    root.innerHTML = `        <audio id="tavern-audio" style="display:none"></audio>
       <div class="pet-stage" id="pet-stage">
         <canvas id="live2d-canvas"></canvas>
         <div class="empty-pet" id="empty-pet">
@@ -328,11 +671,26 @@
             <div class="bubble-text" id="text-claude"></div>
           </div>
         </div>
+        <div class="tavern-bar" id="tavern-bar">
+          <input type="text" id="tavern-input" placeholder="和呆呆聊天..." maxlength="200" />
+          <button id="tavern-send">↵</button>
+        </div>
       </div>
     `;
   }
 
   function loadModelSettings(url) {
+    // Use fetch for file:// URLs (external models), XHR for relative paths
+    var isFile = typeof url === "string" && url.startsWith("file://");
+    if (isFile) {
+      return fetch(url).then(function(r) {
+        if (!r.ok) throw new Error("fetch failed: " + r.status);
+        return r.json().then(function(settings) {
+          settings.url = url;
+          return settings;
+        });
+      });
+    }
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open("GET", url);
@@ -392,6 +750,9 @@
   }
 
   function unloadLive2dModel() {
+    clearRandomBodyMotion();
+    clearSpeakingBodyMotion();
+    stopLipSync();
     if (live2dModel) {
       try {
         if (live2dApp && live2dApp.stage) live2dApp.stage.removeChild(live2dModel);
@@ -490,6 +851,7 @@
       fitLive2dModel();
       hideLive2dError();
       updateLive2dMotion(appState && appState.status, true);
+      scheduleRandomBodyMotion(3500);
     } catch (error) {
       _loadingModelId = null;
       loadedModelId = null;
@@ -632,6 +994,30 @@
     }
 
     api.onCursorPosition((payload) => {
+      // hover greet: detect cursor enter/leave via polling
+      const localForHover = cursorLocalPosition(payload);
+      if (localForHover && payload.width && payload.height) {
+        const inside = localForHover.x >= 0 && localForHover.x <= payload.width &&
+                       localForHover.y >= 0 && localForHover.y <= payload.height;
+        if (inside && !wasCursorInside) {
+          if (hoverGreetTimer) clearTimeout(hoverGreetTimer);
+          hoverGreetTimer = setTimeout(function() {
+            hoverGreetTimer = null;
+            triggerRandomChat();
+          }, 2000);
+        } else if (!inside && wasCursorInside) {
+          if (hoverGreetTimer) clearTimeout(hoverGreetTimer);
+          hoverGreetTimer = null;
+        }
+        wasCursorInside = inside;
+        // eye tracking: only follow when cursor is inside the window
+        if (!inside) {
+          resetCursorFocus();
+          return;
+        }
+      }
+
+      // eye tracking / cursor follow (inside window)
       if (!live2dModel || Date.now() < dragReactionUntil) return;
       const local = cursorLocalPosition(payload);
       if (!local) return;
@@ -664,17 +1050,224 @@
       const now = Date.now();
       if (now - lastDragMotionAt > 900) {
         lastDragMotionAt = now;
-        playLive2dMotion("flick_head", 0);
+        playLive2dMotion("flick_head", 0, "drag");
       }
     });
 
-    window.addEventListener("mousemove", (event) => {
-      if (!live2dModel || Date.now() < dragReactionUntil) return;
-      focusCursorPoint(event.clientX, event.clientY, false);
-      if (cursorFocusTimer) clearTimeout(cursorFocusTimer);
-      cursorFocusTimer = setTimeout(resetCursorFocus, 2500);
+
+
+  }
+
+
+  function initTavernAudio() {
+    if (tavernAudioEl) return;
+    tavernAudioEl = document.getElementById("tavern-audio");
+    if (!tavernAudioEl) return;
+    try {
+      var AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+      try {
+        tavernAudioCtx = new AudioContextCtor({ latencyHint: "interactive" });
+      } catch(e) {
+        tavernAudioCtx = new AudioContextCtor();
+      }
+      tavernAnalyser = tavernAudioCtx.createAnalyser();
+      tavernAnalyser.fftSize = 512;
+      tavernAnalyser.smoothingTimeConstant = 0;
+      var source = tavernAudioCtx.createMediaElementSource(tavernAudioEl);
+      source.connect(tavernAnalyser);
+      tavernAnalyser.connect(tavernAudioCtx.destination);
+    } catch(e) {}
+  }
+
+  function getLipSyncParameterIds() {
+    var ids = [];
+    try {
+      var settings = live2dModel && live2dModel.internalModel && live2dModel.internalModel.settings;
+      if (settings && typeof settings.getLipSyncParameters === "function") {
+        ids = settings.getLipSyncParameters() || [];
+      }
+    } catch(e) {}
+    ids = ids.concat(["ParamMouthOpenY", "PARAM_MOUTH_OPEN_Y"]);
+    return ids.filter(function(id, index) {
+      return id && ids.indexOf(id) === index;
     });
-    window.addEventListener("mouseleave", resetCursorFocus);
+  }
+
+  function setLive2dMouthOpen(value) {
+    if (!live2dModel || !live2dModel.internalModel) return false;
+    var core = live2dModel.internalModel.coreModel;
+    if (!core) return false;
+    var ids = getLipSyncParameterIds();
+    var wrote = false;
+    for (var i = 0; i < ids.length; i++) {
+      try {
+        if (typeof core.setParameterValueById === "function") {
+          core.setParameterValueById(ids[i], value);
+          wrote = true;
+        }
+      } catch(e) {}
+      try {
+        if (typeof core.setParamFloat === "function") {
+          core.setParamFloat(ids[i], value, 1);
+          wrote = true;
+        }
+      } catch(e) {}
+    }
+    return wrote;
+  }
+
+  function applyLipSyncMouth() {
+    setLive2dMouthOpen(tavernLastMouthValue);
+  }
+
+  function updateLipSyncFrame() {
+    if (!tavernAnalyser || !live2dModel || !tavernLipSyncData) return;
+    tavernAnalyser.getByteTimeDomainData(tavernLipSyncData);
+    var sum = 0;
+    for (var i = 0; i < tavernLipSyncData.length; i++) {
+      var centered = (tavernLipSyncData[i] - 128) / 128;
+      sum += centered * centered;
+    }
+    var rms = tavernLipSyncData.length ? Math.sqrt(sum / tavernLipSyncData.length) : 0;
+    var target = Math.min(1, Math.max(0, (rms - 0.018) * 9.5));
+    target = Math.pow(target, 0.72);
+    var smoothing = target > tavernLastMouthValue ? 0.65 : 0.32;
+    var value = tavernLastMouthValue + (target - tavernLastMouthValue) * smoothing;
+    tavernLastMouthValue = value;
+    if (!tavernLipSyncApplyHandler) applyLipSyncMouth();
+  }
+
+  function startLipSync() {
+    stopLipSync();
+    if (!tavernAnalyser || !live2dModel || !live2dApp) return;
+    tavernLipSyncData = new Uint8Array(tavernAnalyser.fftSize);
+    tavernLipSyncTicker = updateLipSyncFrame;
+    live2dApp.ticker.add(tavernLipSyncTicker);
+    tavernLipSyncModel = live2dModel.internalModel;
+    tavernLipSyncApplyHandler = applyLipSyncMouth;
+    try {
+      if (tavernLipSyncModel && typeof tavernLipSyncModel.on === "function") {
+        tavernLipSyncModel.on("beforeModelUpdate", tavernLipSyncApplyHandler);
+      } else {
+        tavernLipSyncApplyHandler = null;
+      }
+    } catch(e) {
+      tavernLipSyncApplyHandler = null;
+    }
+  }
+
+  function stopLipSync() {
+    clearSpeakingBodyMotion();
+    if (tavernLipSyncTicker && live2dApp) {
+      live2dApp.ticker.remove(tavernLipSyncTicker);
+    }
+    if (tavernLipSyncApplyHandler && tavernLipSyncModel) {
+      try {
+        if (typeof tavernLipSyncModel.off === "function") {
+          tavernLipSyncModel.off("beforeModelUpdate", tavernLipSyncApplyHandler);
+        } else if (typeof tavernLipSyncModel.removeListener === "function") {
+          tavernLipSyncModel.removeListener("beforeModelUpdate", tavernLipSyncApplyHandler);
+        }
+      } catch(e) {}
+    }
+    tavernLipSyncTicker = null;
+    tavernLipSyncData = null;
+    tavernLipSyncApplyHandler = null;
+    tavernLipSyncModel = null;
+    tavernLastMouthValue = 0;
+    setLive2dMouthOpen(0);
+  }
+
+  var _tavernAbort = null;
+
+  function stopTavern() {
+    api.tavernAbort();
+    if (tavernAudioEl) {
+      try {
+        tavernAudioEl.pause();
+        tavernAudioEl.currentTime = 0;
+      } catch(e) {}
+    }
+    stopLipSync();
+    tavernBusy = false;
+    var inputEl = document.getElementById("tavern-input");
+    if (inputEl) inputEl.disabled = false;
+    updateTavernButton();
+    if (inputEl) inputEl.focus();
+  }
+
+  async function sendTavernMessage(text) {
+    if (tavernBusy || !text || !text.trim()) return;
+    tavernBusy = true;
+    updateTavernButton();
+    var inputEl = document.getElementById("tavern-input");
+    if (inputEl) { inputEl.disabled = true; inputEl.value = ""; }
+
+    try {
+      document.getElementById("tavern-input").placeholder = "呆呆思考中...";
+      tavernHistory.push({ role: "user", content: text });
+      if (tavernHistory.length > 20) tavernHistory = tavernHistory.slice(-20);
+
+      initTavernAudio();
+
+      var result = await api.tavernChat(tavernHistory);
+      if (!result.ok) throw new Error(result.error || "chat failed");
+      var reply = result.reply;
+      tavernHistory.push({ role: "assistant", content: reply });
+
+      var tts = await api.tavernTts(reply);
+      if (tts.ok && tts.url && tavernAudioEl && tavernAudioCtx) {
+        if (tavernAudioCtx.state === "suspended") await tavernAudioCtx.resume();
+        tavernAudioEl.src = tts.url;
+        tavernAudioEl.onplay = function() { startLipSync(); scheduleSpeakingBodyMotion(120); };
+        tavernAudioEl.onended = function() { stopLipSync(); scheduleRandomBodyMotion(2000); };
+        tavernAudioEl.onerror = function() { stopLipSync(); scheduleRandomBodyMotion(2000); };
+        await tavernAudioEl.play();
+      }
+    } catch(e) {
+      console.error("Tavern error:", e);
+      var emptyEl = document.getElementById("empty-pet");
+      if (emptyEl) {
+        emptyEl.style.display = "grid";
+        emptyEl.querySelector("strong").textContent = "聊天出错";
+        emptyEl.querySelector("span").textContent = String(e.message || e).slice(0, 100);
+        setTimeout(function() { emptyEl.style.display = "none"; }, 4000);
+      }
+    } finally {
+    _tavernAbort = null;
+    tavernBusy = false;
+    if (inputEl) { inputEl.disabled = false; inputEl.placeholder = "和呆呆聊天..."; }
+    updateTavernButton();
+    if (inputEl && !tavernBusy) inputEl.focus();
+  }
+  }
+
+  function updateTavernButton() {
+    var sendBtn = document.getElementById("tavern-send");
+    if (!sendBtn) return;
+    sendBtn.textContent = tavernBusy ? "■" : "↵";
+    sendBtn.style.background = tavernBusy ? "rgba(220, 38, 38, 0.8)" : "rgba(37, 99, 235, 0.7)";
+    sendBtn.title = tavernBusy ? "打断" : "发送";
+  }
+
+  function bindTavernInput() {
+    var inputEl = document.getElementById("tavern-input");
+    var sendBtn = document.getElementById("tavern-send");
+    if (!inputEl || !sendBtn) return;
+    window.__sendTavernMessage = sendTavernMessage;
+    // Focus the Electron window for keyboard input
+    inputEl.addEventListener("focus", function() { api.tavernFocusWindow(); });
+    inputEl.addEventListener("click", function() { api.tavernFocusWindow(); inputEl.focus(); });
+    inputEl.addEventListener("focus", function() { inputEl.select(); });
+    inputEl.addEventListener("click", function() { inputEl.focus(); });
+    inputEl.addEventListener("keydown", function(e) {
+      if (e.key === "Enter") { e.preventDefault(); sendTavernMessage(inputEl.value); }
+    });
+    sendBtn.addEventListener("click", function() {
+      if (tavernBusy) { stopTavern(); }
+      else { sendTavernMessage(inputEl.value); }
+    });
+    api.tavernCleanup();
   }
 
   async function boot() {
@@ -686,10 +1279,31 @@
       bindPetInteractions();
       renderPetState(appState);
     }
+    bindTavernInput();
     api.onUpdate((next) => {
       appState = next;
       if (view === "manager") {
+        // If user is interacting with a SELECT (dropdown open), defer render
+        if (suppressManagerRender) {
+          pendingManagerState = next;
+          return;
+        }
+        // Save INPUT/TEXTAREA focus to restore after render
+        var focused = document.activeElement;
+        var focusedId = focused && focused.id ? focused.id : null;
+        var focusedTag = focused ? focused.tagName : "";
+        var selStart = (focusedTag === "INPUT" || focusedTag === "TEXTAREA") && typeof focused.selectionStart === "number" ? focused.selectionStart : null;
+        var selEnd = (focusedTag === "INPUT" || focusedTag === "TEXTAREA") && typeof focused.selectionEnd === "number" ? focused.selectionEnd : null;
         renderManager(appState);
+        if (focusedId) {
+          var el = document.getElementById(focusedId);
+          if (el) {
+            el.focus();
+            if (selStart !== null && typeof el.selectionStart === "number") {
+              el.setSelectionRange(selStart, selEnd !== null ? selEnd : selStart);
+            }
+          }
+        }
       } else {
         renderPetState(appState);
       }

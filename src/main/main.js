@@ -1,7 +1,9 @@
 const path = require("node:path");
+const fs = require("node:fs");
+const { pathToFileURL } = require("node:url");
 const { app, BrowserWindow, dialog, ipcMain, Menu, shell, screen, Tray } = require("electron");
 const { createCodexSessionMonitor } = require("./codex-session-monitor");
-const { createConfigStore } = require("./config-store");
+const { MIN_PET_WINDOW, createConfigStore } = require("./config-store");
 const { createModelRegistry } = require("./model-registry");
 const { createStatusBridge } = require("./status-bridge");
 const { createStatusPoller } = require("./status-poller");
@@ -35,13 +37,29 @@ function selectedModel() {
   return config.selectedModelId ? modelRegistry.get(config.selectedModelId) : null;
 }
 
+function scanSoundsDir() {
+  const dir = path.join(app.getPath("userData"), "sounds");
+  if (!fs.existsSync(dir)) return [];
+  const sounds = [];
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isFile() && /\.(mp3|wav|ogg)$/i.test(entry.name)) {
+        const full = path.join(dir, entry.name);
+        sounds.push({ id: entry.name, name: entry.name, url: pathToFileURL(full).href });
+      }
+    }
+  } catch {}
+  return sounds.sort((a, b) => a.name.localeCompare(b.name));
+}
+
 function rendererPayload() {
   return {
     appVersion: app.getVersion(),
     config,
     models: modelRegistry.list(),
     selectedModel: selectedModel(),
-    modelsBasePath: modelRegistry.modelsDir,
+    selectedSounds: scanSoundsDir(),
     status: statusPoller ? statusPoller.getLastStatus() : { sources: [] }
   };
 }
@@ -78,11 +96,35 @@ function savePetBounds() {
   broadcast();
 }
 
+function resolvePetWindowBounds(savedBounds) {
+  let width = Math.max(MIN_PET_WINDOW.width, Number(savedBounds.width || 520));
+  let height = Math.max(MIN_PET_WINDOW.height, Number(savedBounds.height || 620));
+  const point = {
+    x: Number.isFinite(savedBounds.x) ? savedBounds.x : 0,
+    y: Number.isFinite(savedBounds.y) ? savedBounds.y : 0
+  };
+  const display = screen.getDisplayMatching({ ...point, width, height });
+  const area = display.workArea;
+  width = Math.min(width, area.width);
+  height = Math.min(height, area.height);
+
+  const result = { width, height };
+  if (Number.isFinite(savedBounds.x)) {
+    result.x = Math.round(Math.min(Math.max(savedBounds.x, area.x), area.x + area.width - width));
+  }
+  if (Number.isFinite(savedBounds.y)) {
+    result.y = Math.round(Math.min(Math.max(savedBounds.y, area.y), area.y + area.height - height));
+  }
+  return result;
+}
+
 function createPetWindow() {
-  const bounds = config.petWindow || {};
+  const bounds = resolvePetWindowBounds(config.petWindow || {});
   petWindow = new BrowserWindow({
-    width: Number(bounds.width || 520),
-    height: Number(bounds.height || 620),
+    width: bounds.width,
+    height: bounds.height,
+    minWidth: MIN_PET_WINDOW.width,
+    minHeight: MIN_PET_WINDOW.height,
     x: Number.isFinite(bounds.x) ? bounds.x : undefined,
     y: Number.isFinite(bounds.y) ? bounds.y : undefined,
     frame: false,
@@ -91,6 +133,7 @@ function createPetWindow() {
     fullscreenable: false,
     skipTaskbar: true,
     hasShadow: false,
+    focusable: true,
     show: false,
     alwaysOnTop: Boolean(config.alwaysOnTop),
     opacity: Number(config.opacity || 1),
@@ -103,11 +146,31 @@ function createPetWindow() {
   });
 
   petWindow.loadFile(rendererFile(), { query: { view: "pet" } });
+
   petWindow.once("ready-to-show", () => {
     keepPetOnTop();
     if (config.petVisible && !userHidden) {
-      petWindow.showInactive();
+      petWindow.show();
       petWindow.moveTop();
+    }
+    if (process.env.DAIDAI_TAVERN_SELFTEST === "1") {
+      setTimeout(() => {
+        if (!petWindow || petWindow.isDestroyed()) return;
+        petWindow.webContents.executeJavaScript(`
+          (async function () {
+            for (let i = 0; i < 50; i += 1) {
+              if (window.__sendTavernMessage) break;
+              await new Promise((resolve) => setTimeout(resolve, 100));
+            }
+            if (!window.__sendTavernMessage) throw new Error("tavern sender not ready");
+            await window.__sendTavernMessage("老公测试一下");
+            return true;
+          })();
+        `).catch((error) => {
+          const file = path.join(app.getPath("userData"), "renderer-error.log");
+          fs.appendFileSync(file, `${new Date().toISOString()} selftest ${error.message || error}\n`, "utf8");
+        });
+      }, 1000);
     }
   });
   petWindow.on("resize", () => {
@@ -190,7 +253,7 @@ function showPet() {
   config = configStore.save({ petVisible: true });
   if (!petWindow || petWindow.isDestroyed()) createPetWindow();
   keepPetOnTop();
-  petWindow.showInactive();
+  petWindow.show();
   petWindow.moveTop();
   broadcast();
 }
@@ -247,8 +310,42 @@ function startCursorForwarding() {
   }, 50);
 }
 
+// Tavern: configurable chat + voice settings live in config.json.
+let _tavernAbortController = null;
+const VOLC_TTS_URL = "https://openspeech.bytedance.com/api/v1/tts";
+
+function tavernChatPath() {
+  const dir = path.join(app.getPath("userData"), "tavern");
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function tavernLog(message, payload) {
+  try {
+    const file = path.join(app.getPath("userData"), "tavern.log");
+    fs.appendFileSync(file, `${new Date().toISOString()} ${message}${payload ? ` ${JSON.stringify(payload)}` : ""}\n`, "utf8");
+  } catch {}
+}
+
+function spokenTextOnly(text) {
+  return String(text || "")
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/[*_~`#>-]/g, "")
+    .replace(/[（(][^（）()]{0,80}[）)]/g, "")
+    .replace(/[\r\n]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function registerIpc() {
   ipcMain.handle("app:get-state", () => rendererPayload());
+  ipcMain.handle("app:renderer-error", (_event, payload) => {
+    try {
+      const file = path.join(app.getPath("userData"), "renderer-error.log");
+      fs.appendFileSync(file, `${new Date().toISOString()} ${JSON.stringify(payload)}\n`, "utf8");
+    } catch {}
+    return true;
+  });
   ipcMain.handle("app:set-config", (_event, patch) => {
     config = configStore.save(patch || {});
     if (petWindow && !petWindow.isDestroyed()) {
@@ -279,6 +376,12 @@ function registerIpc() {
     await shell.openPath(modelRegistry.openDirectoryPath());
     return rendererPayload();
   });
+  ipcMain.handle("model:open-sounds-directory", async () => {
+    const dir = path.join(app.getPath("userData"), "sounds");
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    await shell.openPath(dir);
+    return rendererPayload();
+  });
   ipcMain.handle("pet:show", () => {
     showPet();
     return rendererPayload();
@@ -287,13 +390,131 @@ function registerIpc() {
     hidePet();
     return rendererPayload();
   });
+  // Tavern IPC
+  ipcMain.handle("tavern:chat", async (_event, messages) => {
+    if (_tavernAbortController) _tavernAbortController.abort();
+    _tavernAbortController = new AbortController();
+    try {
+      const tavern = config.tavern || {};
+      const apiKey = tavern.textApiKey || process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY || "";
+      const baseUrl = String(tavern.textBaseUrl || "https://api.deepseek.com/v1").replace(/\/+$/, "");
+      if (!apiKey) throw new Error("聊天模型 API Key 未配置");
+      tavernLog("chat:start", { count: (messages || []).length });
+      const body = JSON.stringify({
+        model: tavern.textModel || "deepseek-chat",
+        messages: [{ role: "system", content: tavern.rolePrompt || "" }].concat(messages || []),
+        temperature: Number(tavern.textTemperature || 0.8),
+        max_tokens: Number(tavern.textMaxTokens || 160),
+        thinking: { type: "disabled" },
+        stream: false
+      });
+      const resp = await fetch(`${baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + apiKey },
+        body,
+        signal: _tavernAbortController.signal
+      });
+      if (!resp.ok) throw new Error("Chat API " + resp.status);
+      const data = await resp.json();
+      const reply = spokenTextOnly((data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || "");
+      tavernLog("chat:ok", { replyPreview: reply.slice(0, 40) });
+      return { ok: true, reply };
+    } catch (e) {
+      tavernLog("chat:error", { name: e.name, message: e.message });
+      if (e.name === "AbortError") return { ok: false, error: "aborted" };
+      return { ok: false, error: e.message };
+    } finally {
+      _tavernAbortController = null;
+    }
+  });
+
+  ipcMain.handle("tavern:tts", async (_event, text) => {
+    const outFile = path.join(tavernChatPath(), "reply_" + Date.now() + ".mp3");
+    try {
+      const tavern = config.tavern || {};
+      const token = tavern.ttsToken || process.env.VOLCENGINE_TOKEN || "";
+      if (!token) throw new Error("火山 TTS Token 未配置");
+      tavernLog("tts:start", { outFile, textPreview: String(text || "").slice(0, 40) });
+      const payload = {
+        app: {
+          appid: tavern.ttsAppId || "3931757810",
+          token: "access_token",
+          cluster: tavern.ttsCluster || "volcano_tts"
+        },
+        user: { uid: "daidai_live2d_pet" },
+        audio: {
+          voice_type: tavern.voice || "zh_female_tianmeitaozi_uranus_bigtts",
+          encoding: "mp3",
+          speed_ratio: Number(tavern.ttsSpeed || 1),
+          volume_ratio: 1.0
+        },
+        request: {
+          reqid: `${Date.now()}_${Math.random().toString(16).slice(2)}`,
+          text: String(text || ""),
+          operation: "query"
+        }
+      };
+      const resp = await fetch(VOLC_TTS_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer;${token}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+      });
+      if (!resp.ok) throw new Error(`Volc TTS ${resp.status}`);
+      const data = await resp.json();
+      if (data.code !== 3000 || !data.data) {
+        throw new Error(data.message || `Volc TTS code ${data.code}`);
+      }
+      fs.writeFileSync(outFile, Buffer.from(data.data, "base64"));
+      tavernLog("tts:ok", { outFile, bytes: fs.statSync(outFile).size });
+      return { ok: true, path: outFile, url: pathToFileURL(outFile).href };
+    } catch (e) {
+      tavernLog("tts:error", { error: String(e.message || e).slice(0, 300) });
+      return { ok: false, error: String(e.message || e).slice(0, 300) };
+    }
+  });
+
+  ipcMain.handle("tavern:cleanup", async () => {
+    try {
+      const dir = tavernChatPath();
+      const files = fs.readdirSync(dir);
+      const now = Date.now();
+      for (const f of files) {
+        if (f.endsWith(".mp3") && now - fs.statSync(path.join(dir, f)).mtimeMs > 3600000) {
+          fs.unlinkSync(path.join(dir, f));
+        }
+      }
+    } catch (e) {}
+    return true;
+  });
+
+  ipcMain.handle("tavern:focus-window", () => {
+    if (petWindow && !petWindow.isDestroyed()) {
+      petWindow.focus();
+    }
+    return true;
+  });
+
+  ipcMain.handle("tavern:abort", () => {
+    if (_tavernAbortController) {
+      _tavernAbortController.abort();
+      _tavernAbortController = null;
+    }
+    return true;
+  });
+
 }
 
 
-// 便携模式：数据目录放在 exe 同级，开发模式放在项目目录
-app.setPath('userData', app.isPackaged
-  ? path.join(path.dirname(app.getPath('exe')), 'user-data')
-  : path.join(app.getAppPath(), 'user-data'));
+// 数据目录：环境变量 DAIDAI_MODELS_DIR 优先，否则便携模式放 exe 同级
+var userDataPath = process.env.DAIDAI_MODELS_DIR
+  ? path.resolve(process.env.DAIDAI_MODELS_DIR)
+  : (app.isPackaged
+    ? path.join(path.dirname(app.getPath('exe')), 'user-data')
+    : path.join(app.getAppPath(), 'user-data'));
+app.setPath('userData', userDataPath);
 app.whenReady().then(() => {
   configStore = createConfigStore(app.getPath("userData"));
   config = configStore.load();
@@ -303,7 +524,7 @@ app.whenReady().then(() => {
   });
 
   // 首次启动：将预制模型复制到 userData + 注册，避免中文路径 file:// 加载问题
-  const fsSync = require("node:fs");
+  const fsSync = fs;
   const modelsDir = path.join(app.getPath("userData"), "models");
   const registryFile = path.join(app.getPath("userData"), "models.json");
   const existingRegistry = (function() { try { return JSON.parse(fsSync.readFileSync(registryFile, "utf8")); } catch(e) { return { models: [] }; } })();

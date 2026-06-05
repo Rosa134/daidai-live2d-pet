@@ -67,7 +67,7 @@ npm install
 | 文本模型 API Key | 文字 API Key | `DEEPSEEK_API_KEY` 或 `OPENAI_API_KEY` |
 | 火山 TTS Token | 火山 Token | `VOLCENGINE_TOKEN` |
 
-本机配置文件位于 Electron `userData` 目录下的 `config.json`。仓库 `.gitignore` 已忽略 `user-data/config.json`、日志和临时音频文件；公开提交前仍建议运行密钥扫描。
+本机配置文件位于 `user-data/config.json`（便携模式下与 exe 同级）。仓库 `.gitignore` 已忽略 `user-data/config.json`、日志和临时音频文件；公开提交前仍建议运行密钥扫描。
 
 ## 接入 AI 会话
 
@@ -100,7 +100,7 @@ Claude Code 用户：参考 [ClaudePet](https://github.com/Kodey/ClaudePet) 的 
 1. 打开管理窗口（托盘 → 设置）
 2. 点击「导入 Live2D 目录」
 3. 选择包含 `.model.json`（Cubism2）的目录
-4. 模型会复制到 `%APPDATA%/daidai-live2d-pet/models/`
+4. 模型会复制到 `user-data/models/` 目录（便携模式下与 exe 同级）
 
 支持的格式：当前稳定路径优先支持 Cubism2（`.model.json`）。Cubism3+（`.model3.json`）仍在验证中，不建议作为公开默认模型。
 
@@ -122,6 +122,33 @@ npm test          # 运行测试
 npm run doctor    # 检查关键文件
 npm start         # 启动应用
 npm run dev       # 开发模式（带 DevTools）
+npm run pack      # 打包到 dist/win-unpacked/（仅解包目录）
+npm run dist      # 构建 Windows 便携版 exe
+```
+
+### 构建 Windows exe
+
+```bash
+# 安装依赖（如果下载慢先设置镜像）
+$env:ELECTRON_MIRROR="https://npmmirror.com/mirrors/electron/"
+npm install
+
+# 构建便携版 zip 包 → dist/Daidai-Live2D-Pet-v0.1.0-win-x64.zip
+npm run dist
+```
+
+构建产物：
+- `dist/win-unpacked/` — 可直接运行的完整应用目录
+- `dist/Daidai-Live2D-Pet-vX.X.X-win-x64.zip` — 分发包，解压即用
+
+### 便携模式
+
+打包后的应用将 `user-data/` 目录创建在 exe 同级位置，无需安装即可留存配置和模型。
+
+如需自定义数据目录，设置环境变量：
+```powershell
+$env:DAIDAI_MODELS_DIR = "D:\MyLive2DData"
+npm start
 ```
 
 ### 项目结构
@@ -136,14 +163,18 @@ npm run dev       # 开发模式（带 DevTools）
 │   │   ├── status-poller.js # 状态轮询 + 归一化
 │   │   └── codex-session-monitor.js # Codex JSONL 监听
 │   ├── renderer/       # 渲染进程
-│   │   ├── app.js           # Live2D 加载、气泡、状态联动、聊天、口型、鼠标交互
+│   │   ├── app.js           # Live2D、气泡、状态联动、聊天、TTS、口型、交互
 │   │   ├── index.html       # 入口（管理窗 + 宠物窗）
 │   │   ├── styles.css       # 样式
 │   │   └── vendor/          # PIXI + Cubism2 runtime
 │   └── preload.js      # contextBridge IPC
 ├── tests/              # 单元测试
 ├── scripts/            # 工具脚本
-├── user-data/models/   # 预制模型
+├── user-data/          # 运行时数据（便携模式）
+│   ├── config.json     # 用户配置
+│   ├── models.json     # 模型注册表
+│   ├── models/         # 导入的 Live2D 模型
+│   └── sounds/         # 自定义音效
 └── bin/                # CLI 入口
 ```
 

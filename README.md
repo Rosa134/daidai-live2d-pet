@@ -14,10 +14,14 @@
 
 ### 演示视频
 
-- [AI 状态联动](docs/videos/demo-ai-status.mp4) — Codex/Claude Code 会话驱动 Live2D 动作切换与中文气泡
-- [角色陪伴模式](docs/videos/demo-tavern-chat.mp4) — 底部输入框聊天，TTS 语音 + 口型同步 + 随机肢体动作
-- [鼠标交互](docs/videos/demo-interaction.mp4) — 拖动宠物、眼睛跟随、悬停随机回复
+![Daidai Live2D Pet](docs/images/hero.png)
 
+| 视频 | 说明 |
+|------|------|
+| [▶ 项目概览](docs/videos/demo-overview.mp4) | 30 秒了解 Daidai Live2D Pet 的全部功能 |
+| [▶ AI 状态联动](docs/videos/demo-ai-status.mp4) | Codex/Claude Code 会话驱动 Live2D 动作切换与中文气泡 |
+| [▶ 角色陪伴模式](docs/videos/demo-tavern-chat.mp4) | 底部输入框聊天，TTS 语音 + 口型同步 + 随机肢体动作 |
+| [▶ 鼠标交互](docs/videos/demo-interaction.mp4) | 拖动宠物、眼睛跟随、悬停随机回复 |
 打开应用后，Live2D 角色会出现在桌面右下角。AI 工作状态会显示在角色上方，角色聊天输入框显示在底部；语音播放时嘴型会跟随音频 RMS 变化，并穿插模型已有的说话/待机动作。
 
 ## ✨ 特性

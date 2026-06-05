@@ -82,7 +82,7 @@ curl -X POST http://127.0.0.1:23334/event -H "Content-Type: application/json" -d
 ```
 
 Codex 用户：宠物自动监听 `.codex/sessions/*.jsonl`，无需手动配置。
-Claude Code 用户：参考 [ClaudePet](https://github.com/Kodey/ClaudePet) 的 hook 配置。
+Claude Code 用户：参考 [ClaudePet](https://github.com/liuchenlili/ClaudePet) 的 hook 配置。
 
 ## 角色聊天与语音
 
@@ -151,7 +151,7 @@ npm run dev       # 开发模式（带 DevTools）
 
 本项目受以下开源项目启发，部分 vendor 文件来源于这些项目：
 
-- **[ClaudePet](https://github.com/Kodey/ClaudePet)** — 原始 Live2D 桌宠概念和状态协议，本项目继承了其 23334 端口协议和透明窗设计理念
+- **[ClaudePet](https://github.com/liuchenlili/ClaudePet)** — 原始 Live2D 桌宠概念和状态协议，本项目继承了其 23334 端口协议和透明窗设计理念
 - **[pixi-live2d-display](https://github.com/guansss/pixi-live2d-display)**（MIT）— PixiJS Live2D 渲染插件，vendor 目录中的 `live2d.min.js`、`cubism2.min.js`、`cubism4.min.js` 来自此项目
 - **[PixiJS](https://github.com/pixijs/pixijs)**（MIT）— 2D WebGL 渲染引擎
 - **[Live2D Cubism SDK](https://www.live2d.com/)** — Live2D 技术核心，`live2dcubismcore.min.js` 来自官方 SDK

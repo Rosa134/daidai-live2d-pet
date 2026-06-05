@@ -508,13 +508,39 @@ function registerIpc() {
 }
 
 
-// 数据目录放到 D 盘，跟项目同盘避免跨盘 file:// 跨域
-// Data dir: env DAIDAI_MODELS_DIR overrides, defaults to project user-data/
-var userDataPath = process.env.DAIDAI_MODELS_DIR
-  ? path.resolve(process.env.DAIDAI_MODELS_DIR)
-  : path.join(app.getAppPath(), 'user-data');
-app.setPath('userData', userDataPath);
+// DAIDAI_DATA_DIR 可覆盖默认数据目录（开发调试用），默认使用 Electron userData（%APPDATA%）
+if (process.env.DAIDAI_DATA_DIR) {
+  app.setPath('userData', path.resolve(process.env.DAIDAI_DATA_DIR));
+}
 app.whenReady().then(() => {
+  // 修正 models.json 中指向不存在目录的旧路径
+  const fixRegistryFile = path.join(app.getPath("userData"), 'models.json');
+  if (fs.existsSync(fixRegistryFile)) {
+    try {
+      const reg = JSON.parse(fs.readFileSync(fixRegistryFile, 'utf8'));
+      const fixModelsDir = path.join(app.getPath("userData"), 'models');
+      let fixed = false;
+      for (const m of reg.models) {
+        if (m.directory && !fs.existsSync(m.directory) && m.id) {
+          const newDir = path.join(fixModelsDir, m.id);
+          if (fs.existsSync(newDir)) {
+            m.directory = newDir;
+            const entries = fs.readdirSync(newDir);
+            const modelFile = entries.find(f => f.endsWith('.model.json') || f.endsWith('.model3.json'));
+            if (modelFile) m.modelPath = path.join(newDir, modelFile);
+            fixed = true;
+          }
+        }
+      }
+      if (fixed) {
+        fs.writeFileSync(fixRegistryFile, JSON.stringify(reg, null, 2), 'utf8');
+        console.log('[main] fixed stale paths in models.json');
+      }
+    } catch (e) {
+      console.error('[main] models.json path fix failed:', e.message);
+    }
+  }
+
   configStore = createConfigStore(app.getPath("userData"));
   config = configStore.load();
   modelRegistry = createModelRegistry({
@@ -570,11 +596,10 @@ app.whenReady().then(() => {
     fsSync.writeFileSync(registryFile, JSON.stringify(existingRegistry, null, 2), "utf8");
   }
 
-  // 若无有效选中的模型，自动选第一个可用（优先 rem）
+  // 若无有效选中的模型，自动选第一个可用
   const allModels = modelRegistry.list();
   if (allModels.length && (!config.selectedModelId || !modelRegistry.get(config.selectedModelId))) {
-    var preferred = allModels.find(function(m){ return m.name === "rem" });
-    config = configStore.save({ selectedModelId: (preferred || allModels[0]).id });
+    config = configStore.save({ selectedModelId: allModels[0].id });
   }
 
   statusPoller = createStatusPoller({

@@ -38,24 +38,39 @@
 
 ## 快速开始
 
-```bash
+需要 Node.js 18+ 和 Git。国内用户建议先设置 Electron 镜像再安装：
+
+```powershell
 # 1. 克隆仓库
 git clone https://github.com/Rosa134/daidai-live2d-pet.git
 cd daidai-live2d-pet
 
-# 2. 安装依赖
+# 2. 设置 Electron 镜像（国内网络必须，否则二进制下载会失败）
+$env:ELECTRON_MIRROR="https://npmmirror.com/mirrors/electron/"
+
+# 3. 安装依赖（含 Electron 二进制下载）
 npm install
 
-# 3. 启动
+# 4. 启动
 npm start
 ```
 
-如果 Electron 下载慢，先设置镜像：
+### 启动常见问题
+
+**`'electron' 不是内部或外部命令`**：Electron 二进制没下载成功，重新安装：
 
 ```powershell
 $env:ELECTRON_MIRROR="https://npmmirror.com/mirrors/electron/"
-npm install
+node node_modules/electron/install.js
 ```
+
+**`npm start` 报 script-shell 错误**：重置 npm 的 script-shell：
+
+```powershell
+npm config set script-shell "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+```
+
+**Electron GPU 缓存权限警告**（`Unable to move the cache`）：不影响功能，可忽略。
 
 启动后：
 - 系统托盘中出现猫耳图标
